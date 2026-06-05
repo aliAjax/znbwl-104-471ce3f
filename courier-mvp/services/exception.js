@@ -31,8 +31,18 @@ async function createException({ package_id, courier_id, exception_type, descrip
     err.statusCode = 404;
     throw err;
   }
-  if (pkg.courier_id && pkg.courier_id !== courier_id) {
-    const err = new Error('该包裹未分配给此快递小哥');
+  if (pkg.status !== 'DELIVERING') {
+    const err = new Error('只有派送中的包裹才能登记异常件');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!pkg.courier_id) {
+    const err = new Error('该包裹尚未分配快递小哥');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (pkg.courier_id !== courier_id) {
+    const err = new Error('只有负责派送该包裹的快递小哥才能登记异常件');
     err.statusCode = 403;
     throw err;
   }
