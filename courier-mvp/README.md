@@ -28,7 +28,8 @@ courier-mvp/
 ├── app.js                  # 入口文件，挂载路由与启动服务
 ├── db.js                   # 数据库初始化、连接与 helper 函数
 ├── utils/
-│   └── response.js         # 统一响应格式工具
+│   ├── response.js         # 统一响应格式工具
+│   └── validators.js       # 请求参数校验工具
 ├── routes/
 │   ├── courier.js          # 快递小哥路由
 │   ├── package.js          # 包裹路由
@@ -140,6 +141,83 @@ curl -X PUT http://localhost:3000/api/packages/1/assign \
 ```
 
 只有 `CREATED` 状态的包裹可以分配给 `ON_DUTY` 状态的快递小哥。
+
+### 批量分配包裹给某个小哥
+
+运营可以一次选择多个 `CREATED` 状态的包裹分配给同一个 `ON_DUTY` 快递小哥。每个包裹独立处理，不会因为其中一个失败而影响其他包裹的结果。
+
+```bash
+curl -X POST http://localhost:3000/api/packages/batch-assign \
+  -H "Content-Type: application/json" \
+  -d '{
+    "package_ids": [1, 2, 3],
+    "courier_id": 1
+  }'
+```
+
+请求参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `package_ids` | `number[]` | 是 | 包裹ID列表，非空数组，最多100个，不可重复，每个ID为正整数 |
+| `courier_id` | `number` | 是 | 快递小哥ID |
+
+成功响应示例（部分包裹不存在时）：
+
+```json
+{
+  "code": 0,
+  "message": "批量分配完成: 2 成功, 1 失败",
+  "data": {
+    "courier_id": 1,
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "details": [
+      {
+        "package_id": 1,
+        "success": true,
+        "data": {
+          "id": 1,
+          "tracking_no": "SF20240601000001",
+          "status": "ASSIGNED",
+          "courier_id": 1,
+          "..."
+          : "..."
+        }
+      },
+      {
+        "package_id": 2,
+        "success": true,
+        "data": {
+          "id": 2,
+          "tracking_no": "SF20240601000002",
+          "status": "ASSIGNED",
+          "courier_id": 1,
+          "..."
+          : "..."
+        }
+      },
+      {
+        "package_id": 3,
+        "success": false,
+        "reason": "包裹不存在"
+      }
+    ]
+  }
+}
+```
+
+每个包裹可能的失败原因：
+
+| reason | 说明 |
+|---|---|
+| `包裹不存在` | 指定ID的包裹在数据库中不存在 |
+| `包裹当前状态为 xxx，只有 CREATED 状态的包裹可以分配` | 包裹状态不符合分配条件 |
+| `包裹已被分配给其他快递小哥` | 包裹已有 courier_id |
+| `分配失败: xxx` | 数据库操作异常等内部错误 |
+
+请求校验失败时（快递小哥不存在、不在岗、参数格式错误等），整个请求直接返回错误，不进入逐个处理阶段。
 
 ### 查询某个小哥的待派送包裹
 

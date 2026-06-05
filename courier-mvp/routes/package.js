@@ -3,6 +3,7 @@ const { runAsync, allAsync, getAsync } = require('../db');
 const { success, fail } = require('../utils/response');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
 const { batchAssignPackages } = require('../services/workstation');
+const { validateBatchAssign } = require('../utils/validators');
 
 const router = Router();
 
@@ -76,27 +77,13 @@ router.put('/:id/assign', async (req, res) => {
 
 router.post('/batch-assign', async (req, res) => {
   try {
-    const { package_ids, courier_id } = req.body;
-
-    if (!courier_id) {
-      return res.status(400).json(fail('请指定快递小哥ID'));
-    }
-    if (!Array.isArray(package_ids) || package_ids.length === 0) {
-      return res.status(400).json(fail('请提供包裹ID列表（非空数组）'));
-    }
-    if (package_ids.length > 100) {
-      return res.status(400).json(fail('单次批量分配不超过100个包裹'));
-    }
-    const hasInvalid = package_ids.some(id => !Number.isInteger(id) || id <= 0);
-    if (hasInvalid) {
-      return res.status(400).json(fail('包裹ID必须为正整数'));
-    }
-    const uniqueIds = [...new Set(package_ids)];
-    if (uniqueIds.length !== package_ids.length) {
-      return res.status(400).json(fail('包裹ID列表中存在重复值'));
+    const validation = validateBatchAssign(req.body);
+    if (!validation.valid) {
+      return res.status(400).json(fail(validation.message));
     }
 
-    const result = await batchAssignPackages(uniqueIds, courier_id);
+    const { package_ids, courier_id } = validation.data;
+    const result = await batchAssignPackages(package_ids, courier_id);
     res.json(success(result, `批量分配完成: ${result.succeeded} 成功, ${result.failed} 失败`));
   } catch (err) {
     if (err.statusCode) {
