@@ -1,4 +1,4 @@
-const { allAsync, getAsync } = require('../db');
+const { allAsync, getAsync, runAsync } = require('../db');
 
 const STATUS_CATEGORIES = {
   pending_pickup: ['ASSIGNED', 'PICKED_UP'],
@@ -70,8 +70,61 @@ async function getCourierDashboard(courierId) {
   };
 }
 
+async function batchAssignPackages(packageIds, courierId) {
+  const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
+  if (!courier) {
+    const err = new Error('快递小哥不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (courier.status !== 'ON_DUTY') {
+    const err = new Error('该快递小哥当前不在岗，无法分配');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const results = [];
+  for (const packageId of packageIds) {
+    try {
+      const pkg = await getAsync('SELECT * FROM package WHERE id = ?', [packageId]);
+      if (!pkg) {
+        results.push({ package_id: packageId, success: false, reason: '包裹不存在' });
+        continue;
+      }
+      if (pkg.status !== 'CREATED') {
+        results.push({ package_id: packageId, success: false, reason: `包裹当前状态为 ${pkg.status}，只有 CREATED 状态的包裹可以分配` });
+        continue;
+      }
+      if (pkg.courier_id) {
+        results.push({ package_id: packageId, success: false, reason: '包裹已被分配给其他快递小哥' });
+        continue;
+      }
+      await runAsync(
+        `UPDATE package SET courier_id = ?, status = 'ASSIGNED', updated_at = datetime('now','localtime') WHERE id = ?`,
+        [courierId, packageId]
+      );
+      const updated = await getAsync('SELECT * FROM package WHERE id = ?', [packageId]);
+      results.push({ package_id: packageId, success: true, data: updated });
+    } catch (err) {
+      results.push({ package_id: packageId, success: false, reason: `分配失败: ${err.message}` });
+    }
+  }
+
+  const succeeded = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+
+  return {
+    courier_id: Number(courierId),
+    total: packageIds.length,
+    succeeded,
+    failed,
+    details: results,
+  };
+}
+
 module.exports = {
   getCourierDailyStats,
   getCourierPendingPackages,
   getCourierDashboard,
+  batchAssignPackages,
 };

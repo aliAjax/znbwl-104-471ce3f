@@ -31,6 +31,7 @@ app.get('/', (req, res) => {
       'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx)',
       'GET    /api/packages/:id': '查看包裹详情（含签收凭证）',
       'PUT    /api/packages/:id/assign': '把包裹分配给某个小哥 (body: {courier_id})',
+      'POST   /api/packages/batch-assign': '批量分配包裹给某个小哥 (body: {package_ids: [1,2,3], courier_id})，每个包裹独立返回成功或失败原因',
       'PUT    /api/packages/:id/status': '更新包裹状态 (body: {status, courier_id?})，不可直接变更为 DELIVERED',
       'POST   /api/exceptions': '登记异常件 (body: {package_id, courier_id, exception_type, description?, on_site_remark?})',
       'GET    /api/exceptions': '查询异常件列表 (?status=xxx&courier_id=xxx&package_id=xxx)',
