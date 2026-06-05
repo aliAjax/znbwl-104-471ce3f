@@ -4,6 +4,7 @@ const { initDatabase, closeDatabase } = require('./db');
 const courierRoutes = require('./routes/courier');
 const packageRoutes = require('./routes/package');
 const exceptionRoutes = require('./routes/exception');
+const deliveryReceiptRoutes = require('./routes/delivery_receipt');
 
 const app = express();
 const PORT = 3000;
@@ -14,6 +15,7 @@ app.use(express.json());
 app.use('/api/couriers', courierRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/exceptions', exceptionRoutes);
+app.use('/api/delivery-receipts', deliveryReceiptRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -25,13 +27,16 @@ app.get('/', (req, res) => {
       'GET    /api/couriers/:id/packages': '查询某个小哥的待派送包裹',
       'POST   /api/packages': '新增包裹',
       'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx)',
-      'GET    /api/packages/:id': '查看包裹详情',
+      'GET    /api/packages/:id': '查看包裹详情（含签收凭证）',
       'PUT    /api/packages/:id/assign': '把包裹分配给某个小哥 (body: {courier_id})',
-      'PUT    /api/packages/:id/status': '更新包裹状态 (body: {status, courier_id?})',
+      'PUT    /api/packages/:id/status': '更新包裹状态 (body: {status, courier_id?})，不可直接变更为 DELIVERED',
       'POST   /api/exceptions': '登记异常件 (body: {package_id, courier_id, exception_type, description?, on_site_remark?})',
       'GET    /api/exceptions': '查询异常件列表 (?status=xxx&courier_id=xxx&package_id=xxx)',
       'GET    /api/exceptions/:id': '查看异常件详情',
       'PUT    /api/exceptions/:id/status': '更新异常件状态 (body: {status})',
+      'POST   /api/delivery-receipts': '提交签收凭证，包裹自动变为 DELIVERED (body: {package_id, courier_id, signer_name, sign_method, sign_time})',
+      'GET    /api/delivery-receipts': '查询签收凭证列表 (?courier_id=xxx&package_id=xxx)',
+      'GET    /api/delivery-receipts/:id': '查看签收凭证详情',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],
@@ -39,6 +44,7 @@ app.get('/', (req, res) => {
     exceptionTypes: ['REFUSED', 'NOT_HOME', 'ADDRESS_WRONG', 'DAMAGED', 'CONTACT_FAILED', 'OTHER'],
     exceptionStatusFlow: 'PENDING → PROCESSING → RESOLVED / CLOSED',
     exceptionStatuses: ['PENDING', 'PROCESSING', 'RESOLVED', 'CLOSED'],
+    signMethods: ['PERSONAL_SIGN', 'AGENT_SIGN', 'CODE_SIGN', 'SMART_CABINET'],
   });
 });
 

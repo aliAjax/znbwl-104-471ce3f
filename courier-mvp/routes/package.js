@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { runAsync, allAsync, getAsync } = require('../db');
 const { success, fail } = require('../utils/response');
+const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
 
 const router = Router();
 
@@ -101,6 +102,9 @@ router.put('/:id/status', async (req, res) => {
     if (!allowedNext.includes(status)) {
       return res.status(400).json(fail(`包裹当前状态为 ${pkg.status}，不允许变更为 ${status}，允许的变更: ${allowedNext.length > 0 ? allowedNext.join(', ') : '无（已终态）'}`));
     }
+    if (status === 'DELIVERED') {
+      return res.status(400).json(fail('包裹签收请通过 POST /api/delivery-receipts 提交签收凭证，不可直接变更状态'));
+    }
     await runAsync(
       `UPDATE package SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
       [status, id]
@@ -145,7 +149,12 @@ router.get('/:id', async (req, res) => {
     if (!pkg) {
       return res.status(404).json(fail('包裹不存在'));
     }
-    res.json(success(pkg));
+    const receipt = await getDeliveryReceiptByPackageId(id);
+    const result = { ...pkg };
+    if (receipt) {
+      result.delivery_receipt = receipt;
+    }
+    res.json(success(result));
   } catch (err) {
     console.error('查询包裹详情失败:', err);
     res.status(500).json(fail('服务器内部错误'));

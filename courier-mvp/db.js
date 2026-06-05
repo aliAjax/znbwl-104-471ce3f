@@ -88,6 +88,19 @@ function initDatabase() {
           FOREIGN KEY (courier_id) REFERENCES courier(id)
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS delivery_receipt (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          package_id INTEGER NOT NULL UNIQUE,
+          courier_id INTEGER NOT NULL,
+          signer_name TEXT NOT NULL,
+          sign_method TEXT NOT NULL,
+          sign_time TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (package_id) REFERENCES package(id),
+          FOREIGN KEY (courier_id) REFERENCES courier(id)
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');

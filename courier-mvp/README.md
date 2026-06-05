@@ -1,6 +1,6 @@
 # Courier MVP
 
-快递小哥派送系统 MVP，使用 Node.js + Express + SQLite 实现。项目提供快递小哥管理、包裹创建、包裹分配、待派送查询、状态更新、包裹列表查询和异常件登记接口。
+快递小哥派送系统 MVP，使用 Node.js + Express + SQLite 实现。项目提供快递小哥管理、包裹创建、包裹分配、待派送查询、状态更新、包裹列表查询、异常件登记和派送签收凭证接口。
 
 ## 启动
 
@@ -32,9 +32,11 @@ courier-mvp/
 ├── routes/
 │   ├── courier.js          # 快递小哥路由
 │   ├── package.js          # 包裹路由
-│   └── exception.js        # 异常件登记路由
+│   ├── exception.js        # 异常件登记路由
+│   └── delivery_receipt.js # 派送签收凭证路由
 ├── services/
-│   └── exception.js        # 异常件业务逻辑
+│   ├── exception.js        # 异常件业务逻辑
+│   └── delivery_receipt.js # 签收凭证业务逻辑
 ├── data/
 │   └── courier.db          # SQLite 数据库文件（自动生成）
 └── package.json
@@ -83,6 +85,15 @@ PENDING -> PROCESSING -> RESOLVED / CLOSED
 | DAMAGED | 包裹破损 |
 | CONTACT_FAILED | 联系不上收件人 |
 | OTHER | 其他 |
+
+签收方式：
+
+| 值 | 说明 |
+|---|---|
+| PERSONAL_SIGN | 本人签收 |
+| AGENT_SIGN | 代收人签收 |
+| CODE_SIGN | 验证码签收 |
+| SMART_CABINET | 智能快递柜签收 |
 
 ## 主要接口示例
 
@@ -149,7 +160,7 @@ curl -X PUT http://localhost:3000/api/packages/1/status \
   }'
 ```
 
-`courier_id` 可用于校验该包裹是否分配给当前小哥。状态只能按状态流向前更新。
+`courier_id` 可用于校验该包裹是否分配给当前小哥。状态只能按状态流向前更新。**注意：不可通过此接口直接将状态变更为 `DELIVERED`，需通过签收凭证接口提交签收信息后自动变更。**
 
 ### 查看全部包裹列表
 
@@ -175,11 +186,71 @@ curl "http://localhost:3000/api/packages?courier_id=1"
 curl http://localhost:3000/api/packages/1
 ```
 
+若该包裹已签收，返回数据中会包含 `delivery_receipt` 字段，记录签收人姓名、签收方式和签收时间等信息。
+
 ### 查询全部快递小哥
 
 ```bash
 curl http://localhost:3000/api/couriers
 ```
+
+### 提交签收凭证
+
+包裹从 `DELIVERING` 变为 `DELIVERED` 必须通过此接口提交签收凭证，不可直接变更包裹状态：
+
+```bash
+curl -X POST http://localhost:3000/api/delivery-receipts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "package_id": 4,
+    "courier_id": 1,
+    "signer_name": "客户甲",
+    "sign_method": "PERSONAL_SIGN",
+    "sign_time": "2026-06-05 14:30:00"
+  }'
+```
+
+必填字段：`package_id`、`courier_id`、`signer_name`、`sign_method`、`sign_time`
+
+`sign_method` 可选值：`PERSONAL_SIGN`（本人签收）、`AGENT_SIGN`（代收人签收）、`CODE_SIGN`（验证码签收）、`SMART_CABINET`（智能快递柜签收）
+
+校验逻辑：
+- 包裹必须处于 `DELIVERING` 状态
+- 提交人必须是该包裹的负责快递小哥
+- 同一包裹不可重复提交签收凭证
+- 提交成功后包裹状态自动变更为 `DELIVERED`
+
+### 查询签收凭证列表
+
+```bash
+curl http://localhost:3000/api/delivery-receipts
+```
+
+支持按快递小哥筛选：
+
+```bash
+curl "http://localhost:3000/api/delivery-receipts?courier_id=1"
+```
+
+支持按包裹筛选：
+
+```bash
+curl "http://localhost:3000/api/delivery-receipts?package_id=4"
+```
+
+支持组合筛选：
+
+```bash
+curl "http://localhost:3000/api/delivery-receipts?courier_id=1&package_id=4"
+```
+
+### 查看签收凭证详情
+
+```bash
+curl http://localhost:3000/api/delivery-receipts/1
+```
+
+返回签收凭证详情，包含关联的包裹和快递小哥信息。
 
 ### 登记异常件
 
