@@ -1,7 +1,7 @@
 const { allAsync, getAsync } = require('../db');
 
 const STATUS_CATEGORIES = {
-  pending_pickup: ['ASSIGNED'],
+  pending_pickup: ['ASSIGNED', 'PICKED_UP'],
   delivering: ['DELIVERING'],
   completed: ['DELIVERED'],
   failed: ['FAILED'],
