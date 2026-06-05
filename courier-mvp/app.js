@@ -5,6 +5,7 @@ const courierRoutes = require('./routes/courier');
 const packageRoutes = require('./routes/package');
 const exceptionRoutes = require('./routes/exception');
 const deliveryReceiptRoutes = require('./routes/delivery_receipt');
+const workstationRoutes = require('./routes/workstation');
 
 const app = express();
 const PORT = 3000;
@@ -16,6 +17,7 @@ app.use('/api/couriers', courierRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/exceptions', exceptionRoutes);
 app.use('/api/delivery-receipts', deliveryReceiptRoutes);
+app.use('/api/workstation', workstationRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -37,6 +39,9 @@ app.get('/', (req, res) => {
       'POST   /api/delivery-receipts': '提交签收凭证，包裹自动变为 DELIVERED (body: {package_id, courier_id, signer_name, sign_method, sign_time})',
       'GET    /api/delivery-receipts': '查询签收凭证列表 (?courier_id=xxx&package_id=xxx)',
       'GET    /api/delivery-receipts/:id': '查看签收凭证详情',
+      'GET    /api/workstation/:courierId/dashboard': '快递小哥工作台总览（今日统计+待处理包裹）',
+      'GET    /api/workstation/:courierId/stats': '快递小哥今日包裹统计',
+      'GET    /api/workstation/:courierId/pending-packages': '快递小哥今日待处理包裹列表',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],
