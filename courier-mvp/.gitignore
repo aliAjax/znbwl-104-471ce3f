@@ -1,0 +1,15 @@
+node_modules/
+data/*.db
+*.log
+.DS_Store
+npm-debug.log*
+.env
+.env.*
+!.env.example
+dist/
+build/
+coverage/
+.cache/
+.npm/
+.vscode/
+.idea/
