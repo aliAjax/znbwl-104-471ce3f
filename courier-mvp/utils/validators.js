@@ -3,8 +3,8 @@ const BATCH_ASSIGN_MAX_COUNT = 100;
 function validateBatchAssign(body) {
   const { package_ids, courier_id } = body;
 
-  if (!courier_id) {
-    return { valid: false, message: '请指定快递小哥ID' };
+  if (!Number.isInteger(courier_id) || courier_id <= 0) {
+    return { valid: false, message: '快递小哥ID必须为正整数' };
   }
   if (!Array.isArray(package_ids) || package_ids.length === 0) {
     return { valid: false, message: '请提供包裹ID列表（非空数组）' };
