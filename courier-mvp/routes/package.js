@@ -140,20 +140,56 @@ router.put('/:id/status', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { status, courier_id } = req.query;
-    let sql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN courier c ON p.courier_id = c.id WHERE 1=1';
+    const { status, courier_id, tracking_no, receiver_phone, receiver_address } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.page_size) || 10));
+    const offset = (page - 1) * pageSize;
+
+    let countSql = 'SELECT COUNT(*) as total FROM package p WHERE 1=1';
+    let dataSql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN courier c ON p.courier_id = c.id WHERE 1=1';
     const params = [];
+
     if (status) {
-      sql += ' AND p.status = ?';
+      countSql += ' AND p.status = ?';
+      dataSql += ' AND p.status = ?';
       params.push(status);
     }
     if (courier_id) {
-      sql += ' AND p.courier_id = ?';
+      countSql += ' AND p.courier_id = ?';
+      dataSql += ' AND p.courier_id = ?';
       params.push(courier_id);
     }
-    sql += ' ORDER BY p.created_at DESC';
-    const packages = await allAsync(sql, params);
-    res.json(success(packages));
+    if (tracking_no) {
+      countSql += ' AND p.tracking_no LIKE ?';
+      dataSql += ' AND p.tracking_no LIKE ?';
+      params.push(`%${tracking_no}%`);
+    }
+    if (receiver_phone) {
+      countSql += ' AND p.receiver_phone LIKE ?';
+      dataSql += ' AND p.receiver_phone LIKE ?';
+      params.push(`%${receiver_phone}%`);
+    }
+    if (receiver_address) {
+      countSql += ' AND p.receiver_address LIKE ?';
+      dataSql += ' AND p.receiver_address LIKE ?';
+      params.push(`%${receiver_address}%`);
+    }
+
+    dataSql += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
+
+    const countRow = await getAsync(countSql, params);
+    const total = countRow.total;
+    const packages = await allAsync(dataSql, [...params, pageSize, offset]);
+
+    res.json(success({
+      list: packages,
+      pagination: {
+        page,
+        page_size: pageSize,
+        total,
+        total_pages: Math.ceil(total / pageSize),
+      },
+    }));
   } catch (err) {
     console.error('查询包裹列表失败:', err);
     res.status(500).json(fail('服务器内部错误'));

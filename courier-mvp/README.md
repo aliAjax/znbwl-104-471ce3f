@@ -258,6 +258,71 @@ curl "http://localhost:3000/api/packages?status=ASSIGNED"
 curl "http://localhost:3000/api/packages?courier_id=1"
 ```
 
+支持按运单号模糊搜索：
+
+```bash
+curl "http://localhost:3000/api/packages?tracking_no=SF2024"
+```
+
+支持按收件人手机号模糊搜索：
+
+```bash
+curl "http://localhost:3000/api/packages?receiver_phone=13900001111"
+```
+
+支持按收件地址关键词模糊搜索：
+
+```bash
+curl "http://localhost:3000/api/packages?receiver_address=海淀"
+```
+
+支持组合搜索与分页：
+
+```bash
+curl "http://localhost:3000/api/packages?status=DELIVERING&receiver_address=海淀&page=1&page_size=10"
+```
+
+查询参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `status` | `string` | 否 | 按包裹状态精确筛选 |
+| `courier_id` | `number` | 否 | 按快递小哥ID精确筛选 |
+| `tracking_no` | `string` | 否 | 按运单号模糊搜索 |
+| `receiver_phone` | `string` | 否 | 按收件人手机号模糊搜索 |
+| `receiver_address` | `string` | 否 | 按收件地址关键词模糊搜索 |
+| `page` | `number` | 否 | 页码，默认1 |
+| `page_size` | `number` | 否 | 每页数量，默认10，最大100 |
+
+分页响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "操作成功",
+  "data": {
+    "list": [
+      {
+        "id": 1,
+        "tracking_no": "SF20240601000001",
+        "receiver_name": "客户甲",
+        "receiver_phone": "13900001111",
+        "receiver_address": "北京市海淀区知春路1号",
+        "status": "CREATED",
+        "..."
+: "..."
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "page_size": 10,
+      "total": 5,
+      "total_pages": 1
+    }
+  }
+}
+```
+
 ### 查看包裹详情
 
 ```bash
