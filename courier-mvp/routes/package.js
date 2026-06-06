@@ -3,7 +3,7 @@ const { runAsync, allAsync, getAsync } = require('../db');
 const { success, fail } = require('../utils/response');
 const { parsePaginationParams, buildPaginationResult } = require('../utils/pagination');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
-const { batchAssignPackages } = require('../services/workstation');
+const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { validateBatchAssign } = require('../utils/validators');
 
 const router = Router();
@@ -61,7 +61,7 @@ router.put('/:id/assign', async (req, res) => {
     if (!courier) {
       return res.status(404).json(fail('快递小哥不存在'));
     }
-    if (courier.status !== 'ON_DUTY') {
+    if (!isCourierOnDuty(courier)) {
       return res.status(400).json(fail('该快递小哥当前不在岗，无法分配'));
     }
     await runAsync(

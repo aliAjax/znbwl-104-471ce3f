@@ -43,6 +43,7 @@ app.get('/', (req, res) => {
       'GET    /api/workstation/:courierId/dashboard': '快递小哥工作台总览（今日统计+待处理包裹）',
       'GET    /api/workstation/:courierId/stats': '快递小哥今日包裹统计',
       'GET    /api/workstation/:courierId/pending-packages': '快递小哥今日待处理包裹列表',
+      'PUT    /api/workstation/:courierId/status': '更新快递小哥上下班状态 (body: {status: ON_DUTY|OFF_DUTY})，名下有未完成包裹时不可切换为OFF_DUTY',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],

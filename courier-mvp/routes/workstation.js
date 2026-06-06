@@ -4,6 +4,7 @@ const {
   getCourierDailyStats,
   getCourierPendingPackages,
   getCourierDashboard,
+  updateCourierStatus,
 } = require('../services/workstation');
 
 const router = Router();
@@ -46,6 +47,24 @@ router.get('/:courierId/pending-packages', async (req, res) => {
       return res.status(err.statusCode).json(fail(err.message));
     }
     console.error('查询待处理包裹失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.put('/:courierId/status', async (req, res) => {
+  try {
+    const { courierId } = req.params;
+    const { status } = req.body;
+    if (!status) {
+      return res.status(400).json(fail('状态不能为空'));
+    }
+    const updatedCourier = await updateCourierStatus(courierId, status);
+    res.json(success(updatedCourier, '快递小哥状态更新成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('更新快递小哥状态失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });

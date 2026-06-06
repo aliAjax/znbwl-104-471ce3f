@@ -334,7 +334,40 @@ curl http://localhost:3000/api/packages/1
 
 若该包裹已签收，返回数据中会包含 `delivery_receipt` 字段，记录签收人姓名、签收方式和签收时间等信息。
 
-### 查询全部快递小哥
+### 更新快递小哥上下班状态
+
+运营可以将快递小哥切换为 `ON_DUTY`（在岗）或 `OFF_DUTY`（下班）状态。如果小哥名下还有未完成包裹（状态为 `ASSIGNED`、`PICKED_UP`、`DELIVERING`），则无法切换为 `OFF_DUTY`。
+
+```bash
+curl -X PUT http://localhost:3000/api/workstation/1/status \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "OFF_DUTY"
+  }'
+```
+
+请求参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `status` | `string` | 是 | 目标状态，可选值：`ON_DUTY`、`OFF_DUTY` |
+
+校验逻辑：
+- 状态值必须有效
+- 不可重复设置相同状态
+- 切换为 `OFF_DUTY` 时，需检查该小哥名下是否有未完成包裹，如有则拒绝切换并返回具体未完成数量
+
+错误响应示例（有未完成包裹时）：
+
+```json
+{
+  "code": -1,
+  "message": "该快递小哥名下还有 2 个未完成包裹，无法切换为下班状态",
+  "data": null
+}
+```
+
+### 查看全部快递小哥
 
 ```bash
 curl http://localhost:3000/api/couriers

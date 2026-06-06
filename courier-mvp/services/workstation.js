@@ -1,11 +1,20 @@
 const { allAsync, getAsync, runAsync } = require('../db');
 
+const COURIER_STATUSES = {
+  ON_DUTY: 'ON_DUTY',
+  OFF_DUTY: 'OFF_DUTY',
+};
+
+const VALID_COURIER_STATUSES = Object.values(COURIER_STATUSES);
+
 const STATUS_CATEGORIES = {
   pending_pickup: ['ASSIGNED', 'PICKED_UP'],
   delivering: ['DELIVERING'],
   completed: ['DELIVERED'],
   failed: ['FAILED'],
 };
+
+const UNFINISHED_PACKAGE_STATUSES = ['ASSIGNED', 'PICKED_UP', 'DELIVERING'];
 
 async function getCourierDailyStats(courierId) {
   const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
@@ -77,7 +86,7 @@ async function batchAssignPackages(packageIds, courierId) {
     err.statusCode = 404;
     throw err;
   }
-  if (courier.status !== 'ON_DUTY') {
+  if (!isCourierOnDuty(courier)) {
     const err = new Error('该快递小哥当前不在岗，无法分配');
     err.statusCode = 400;
     throw err;
@@ -122,9 +131,66 @@ async function batchAssignPackages(packageIds, courierId) {
   };
 }
 
+async function getCourierUnfinishedPackageCount(courierId) {
+  const placeholders = UNFINISHED_PACKAGE_STATUSES.map(() => '?').join(',');
+  const row = await getAsync(
+    `SELECT COUNT(*) as count FROM package
+     WHERE courier_id = ? AND status IN (${placeholders})`,
+    [courierId, ...UNFINISHED_PACKAGE_STATUSES]
+  );
+  return row.count;
+}
+
+function isCourierOnDuty(courier) {
+  return courier && courier.status === COURIER_STATUSES.ON_DUTY;
+}
+
+async function updateCourierStatus(courierId, status) {
+  if (!VALID_COURIER_STATUSES.includes(status)) {
+    const err = new Error(`无效的状态，可选值: ${VALID_COURIER_STATUSES.join(', ')}`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
+  if (!courier) {
+    const err = new Error('快递小哥不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (courier.status === status) {
+    const err = new Error(`快递小哥当前已是 ${status} 状态`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (status === COURIER_STATUSES.OFF_DUTY) {
+    const unfinishedCount = await getCourierUnfinishedPackageCount(courierId);
+    if (unfinishedCount > 0) {
+      const err = new Error(`该快递小哥名下还有 ${unfinishedCount} 个未完成包裹，无法切换为下班状态`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  await runAsync(
+    `UPDATE courier SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+    [status, courierId]
+  );
+
+  const updatedCourier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
+  return updatedCourier;
+}
+
 module.exports = {
+  COURIER_STATUSES,
+  VALID_COURIER_STATUSES,
+  isCourierOnDuty,
   getCourierDailyStats,
   getCourierPendingPackages,
   getCourierDashboard,
   batchAssignPackages,
+  updateCourierStatus,
+  getCourierUnfinishedPackageCount,
 };
