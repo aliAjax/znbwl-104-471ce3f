@@ -309,8 +309,11 @@ curl "http://localhost:3000/api/packages?status=DELIVERING&receiver_address=海�
         "receiver_phone": "13900001111",
         "receiver_address": "北京市海淀区知春路1号",
         "status": "CREATED",
-        "..."
-: "..."
+        "courier_id": null,
+        "courier_name": null,
+        "courier_phone": null,
+        "created_at": "2026-06-05 17:01:57",
+        "updated_at": "2026-06-05 17:01:57"
       }
     ],
     "pagination": {
