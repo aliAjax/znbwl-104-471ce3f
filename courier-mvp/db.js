@@ -69,10 +69,23 @@ function initDatabase() {
           weight REAL DEFAULT 0,
           status TEXT NOT NULL DEFAULT 'CREATED',
           courier_id INTEGER,
+          site_id INTEGER,
+          zone_id INTEGER,
           created_at TEXT DEFAULT (datetime('now','localtime')),
           updated_at TEXT DEFAULT (datetime('now','localtime')),
-          FOREIGN KEY (courier_id) REFERENCES courier(id)
+          FOREIGN KEY (courier_id) REFERENCES courier(id),
+          FOREIGN KEY (site_id) REFERENCES site(id),
+          FOREIGN KEY (zone_id) REFERENCES delivery_zone(id)
         );`);
+
+        const pragmaResult = await allAsync("PRAGMA table_info('package')");
+        const packageColumns = pragmaResult.map(col => col.name);
+        if (!packageColumns.includes('site_id')) {
+          await runAsync("ALTER TABLE package ADD COLUMN site_id INTEGER");
+        }
+        if (!packageColumns.includes('zone_id')) {
+          await runAsync("ALTER TABLE package ADD COLUMN zone_id INTEGER");
+        }
 
         db.run(`CREATE TABLE IF NOT EXISTS exception_record (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +114,36 @@ function initDatabase() {
           FOREIGN KEY (courier_id) REFERENCES courier(id)
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS site (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          address TEXT,
+          phone TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS delivery_zone (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (site_id) REFERENCES site(id),
+          UNIQUE(site_id, name)
+        );`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS courier_zone (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          courier_id INTEGER NOT NULL,
+          zone_id INTEGER NOT NULL,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (courier_id) REFERENCES courier(id),
+          FOREIGN KEY (zone_id) REFERENCES delivery_zone(id),
+          UNIQUE(courier_id, zone_id)
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');
@@ -109,11 +152,25 @@ function initDatabase() {
           await runAsync(`INSERT INTO courier (name, phone, status) VALUES ('李四', '13800002222', 'ON_DUTY')`);
           await runAsync(`INSERT INTO courier (name, phone, status) VALUES ('王五', '13800003333', 'OFF_DUTY')`);
 
-          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status) VALUES ('SF20240601000001', '发件人A', '13700001111', '客户甲', '13900001111', '北京市海淀区知春路1号', 1.50, 'CREATED')`);
-          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status) VALUES ('SF20240601000002', '发件人B', '13700002222', '客户乙', '13900002222', '北京市朝阳区望京花园2号', 2.00, 'CREATED')`);
-          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id) VALUES ('SF20240601000003', '发件人C', '13700003333', '客户丙', '13900003333', '北京市海淀区五道口3号', 0.50, 'ASSIGNED', 1)`);
-          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id) VALUES ('SF20266010400001', '发件人D', '13700004444', '客户甲', '13900001111', '北京市海淀区知春路1号', 3.00, 'DELIVERING', 1)`);
-          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id) VALUES ('SF20266010400002', '发件人E', '13700005555', '客户乙', '13900002222', '北京市朝阳区望京花园2号', 1.20, 'DELIVERED', 2)`);
+          await runAsync(`INSERT INTO site (name, address, phone) VALUES ('中关村站点', '北京市海淀区中关村大街1号', '010-88888801')`);
+          await runAsync(`INSERT INTO site (name, address, phone) VALUES ('望京站点', '北京市朝阳区望京SOHO', '010-88888802')`);
+
+          await runAsync(`INSERT INTO delivery_zone (site_id, name, description) VALUES (1, '海淀区-知春路片区', '知春路、五道口周边区域')`);
+          await runAsync(`INSERT INTO delivery_zone (site_id, name, description) VALUES (1, '海淀区-中关村片区', '中关村、苏州街周边区域')`);
+          await runAsync(`INSERT INTO delivery_zone (site_id, name, description) VALUES (2, '朝阳区-望京片区', '望京、酒仙桥周边区域')`);
+          await runAsync(`INSERT INTO delivery_zone (site_id, name, description) VALUES (2, '朝阳区-国贸片区', '国贸、CBD周边区域')`);
+
+          await runAsync(`INSERT INTO courier_zone (courier_id, zone_id) VALUES (1, 1)`);
+          await runAsync(`INSERT INTO courier_zone (courier_id, zone_id) VALUES (1, 2)`);
+          await runAsync(`INSERT INTO courier_zone (courier_id, zone_id) VALUES (2, 3)`);
+          await runAsync(`INSERT INTO courier_zone (courier_id, zone_id) VALUES (2, 4)`);
+          await runAsync(`INSERT INTO courier_zone (courier_id, zone_id) VALUES (3, 1)`);
+
+          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id) VALUES ('SF20240601000001', '发件人A', '13700001111', '客户甲', '13900001111', '北京市海淀区知春路1号', 1.50, 'CREATED', 1, 1)`);
+          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id) VALUES ('SF20240601000002', '发件人B', '13700002222', '客户乙', '13900002222', '北京市朝阳区望京花园2号', 2.00, 'CREATED', 2, 3)`);
+          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id, site_id, zone_id) VALUES ('SF20240601000003', '发件人C', '13700003333', '客户丙', '13900003333', '北京市海淀区五道口3号', 0.50, 'ASSIGNED', 1, 1, 1)`);
+          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id, site_id, zone_id) VALUES ('SF20266010400001', '发件人D', '13700004444', '客户甲', '13900001111', '北京市海淀区知春路1号', 3.00, 'DELIVERING', 1, 1, 1)`);
+          await runAsync(`INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, courier_id, site_id, zone_id) VALUES ('SF20266010400002', '发件人E', '13700005555', '客户乙', '13900002222', '北京市朝阳区望京花园2号', 1.20, 'DELIVERED', 2, 2, 3)`);
 
           console.log('种子数据初始化完成');
         } else {

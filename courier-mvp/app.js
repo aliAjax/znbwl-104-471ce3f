@@ -6,6 +6,7 @@ const packageRoutes = require('./routes/package');
 const exceptionRoutes = require('./routes/exception');
 const deliveryReceiptRoutes = require('./routes/delivery_receipt');
 const workstationRoutes = require('./routes/workstation');
+const zoneRoutes = require('./routes/zone');
 
 const app = express();
 const PORT = 3000;
@@ -18,6 +19,7 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/exceptions', exceptionRoutes);
 app.use('/api/delivery-receipts', deliveryReceiptRoutes);
 app.use('/api/workstation', workstationRoutes);
+app.use('/api', zoneRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -27,10 +29,10 @@ app.get('/', (req, res) => {
       'POST   /api/couriers': '新增快递小哥',
       'GET    /api/couriers': '查询全部快递小哥',
       'GET    /api/couriers/:id/packages': '查询某个小哥的待派送包裹',
-      'POST   /api/packages': '新增包裹',
-      'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx)',
-      'GET    /api/packages/:id': '查看包裹详情（含签收凭证）',
-      'PUT    /api/packages/:id/assign': '把包裹分配给某个小哥 (body: {courier_id})',
+      'POST   /api/packages': '新增包裹 (body: {tracking_no?, sender_name?, sender_phone?, receiver_name, receiver_phone, receiver_address?, weight?, site_id?, zone_id?})',
+      'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx&site_id=xxx&zone_id=xxx&tracking_no=xxx&receiver_phone=xxx&receiver_address=xxx)',
+      'GET    /api/packages/:id': '查看包裹详情（含签收凭证、站点、区域信息）',
+      'PUT    /api/packages/:id/assign': '把包裹分配给某个小哥 (body: {courier_id})，只能分配给负责同一区域且在岗的小哥',
       'POST   /api/packages/batch-assign': '批量分配包裹给某个小哥 (body: {package_ids: [1,2,3], courier_id})，每个包裹独立返回成功或失败原因',
       'PUT    /api/packages/:id/status': '更新包裹状态 (body: {status, courier_id?})，不可直接变更为 DELIVERED',
       'POST   /api/exceptions': '登记异常件 (body: {package_id, courier_id, exception_type, description?, on_site_remark?})',
@@ -44,6 +46,21 @@ app.get('/', (req, res) => {
       'GET    /api/workstation/:courierId/stats': '快递小哥今日包裹统计',
       'GET    /api/workstation/:courierId/pending-packages': '快递小哥今日待处理包裹列表',
       'PUT    /api/workstation/:courierId/status': '更新快递小哥上下班状态 (body: {status: ON_DUTY|OFF_DUTY})，名下有未完成包裹时不可切换为OFF_DUTY',
+      'POST   /api/sites': '新增站点 (body: {name, address?, phone?})',
+      'GET    /api/sites': '查询全部站点列表',
+      'GET    /api/sites/:id': '查看站点详情',
+      'PUT    /api/sites/:id': '更新站点信息 (body: {name?, address?, phone?})',
+      'DELETE /api/sites/:id': '删除站点',
+      'POST   /api/zones': '新增配送区域 (body: {site_id, name, description?})',
+      'GET    /api/zones': '查询全部配送区域列表 (?site_id=xxx)',
+      'GET    /api/zones/:id': '查看配送区域详情',
+      'PUT    /api/zones/:id': '更新配送区域 (body: {name?, description?})',
+      'DELETE /api/zones/:id': '删除配送区域',
+      'GET    /api/zones/:id/available-couriers': '查询该区域可分配的在岗快递小哥',
+      'POST   /api/courier-zones': '为快递小哥分配负责区域 (body: {courier_id, zone_id})',
+      'DELETE /api/courier-zones': '移除快递小哥的负责区域 (body: {courier_id, zone_id})',
+      'GET    /api/couriers/:id/zones': '查询快递小哥负责的所有区域',
+      'GET    /api/zones/:id/couriers': '查询负责该区域的所有快递小哥',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],

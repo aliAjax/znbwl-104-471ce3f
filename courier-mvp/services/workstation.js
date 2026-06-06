@@ -1,4 +1,5 @@
 const { allAsync, getAsync, runAsync } = require('../db');
+const { isCourierInZone } = require('./zone');
 
 const COURIER_STATUSES = {
   ON_DUTY: 'ON_DUTY',
@@ -108,11 +109,21 @@ async function batchAssignPackages(packageIds, courierId) {
         results.push({ package_id: packageId, success: false, reason: '包裹已被分配给其他快递小哥' });
         continue;
       }
+      if (pkg.zone_id) {
+        const inZone = await isCourierInZone(courierId, pkg.zone_id);
+        if (!inZone) {
+          results.push({ package_id: packageId, success: false, reason: '该快递小哥不负责此包裹的配送区域' });
+          continue;
+        }
+      }
       await runAsync(
         `UPDATE package SET courier_id = ?, status = 'ASSIGNED', updated_at = datetime('now','localtime') WHERE id = ?`,
         [courierId, packageId]
       );
-      const updated = await getAsync('SELECT * FROM package WHERE id = ?', [packageId]);
+      const updated = await getAsync(
+        'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
+        [packageId]
+      );
       results.push({ package_id: packageId, success: true, data: updated });
     } catch (err) {
       results.push({ package_id: packageId, success: false, reason: `分配失败: ${err.message}` });

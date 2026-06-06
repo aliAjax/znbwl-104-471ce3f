@@ -4,6 +4,7 @@ const { success, fail } = require('../utils/response');
 const { parsePaginationParams, buildPaginationResult } = require('../utils/pagination');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
+const { isCourierInZone } = require('../services/zone');
 const { validateBatchAssign } = require('../utils/validators');
 
 const router = Router();
@@ -21,9 +22,24 @@ function generateTrackingNo() {
 
 router.post('/', async (req, res) => {
   try {
-    const { tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight } = req.body;
+    const { tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, site_id, zone_id } = req.body;
     if (!receiver_name || !receiver_phone) {
       return res.status(400).json(fail('收件人姓名和手机号不能为空'));
+    }
+    if (site_id) {
+      const site = await getAsync('SELECT id FROM site WHERE id = ?', [site_id]);
+      if (!site) {
+        return res.status(400).json(fail('所属站点不存在'));
+      }
+    }
+    if (zone_id) {
+      const zone = await getAsync('SELECT * FROM delivery_zone WHERE id = ?', [zone_id]);
+      if (!zone) {
+        return res.status(400).json(fail('配送区域不存在'));
+      }
+      if (site_id && zone.site_id !== Number(site_id)) {
+        return res.status(400).json(fail('该配送区域不属于所选站点'));
+      }
     }
     const finalTrackingNo = tracking_no || generateTrackingNo();
     const existing = await getAsync('SELECT id FROM package WHERE tracking_no = ?', [finalTrackingNo]);
@@ -31,11 +47,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json(fail('运单号已存在'));
     }
     const result = await runAsync(
-      `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED')`,
-      [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0]
+      `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`,
+      [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, site_id || null, zone_id || null]
     );
-    const pkg = await getAsync('SELECT * FROM package WHERE id = ?', [result.lastID]);
+    const pkg = await getAsync(
+      'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
+      [result.lastID]
+    );
     res.status(201).json(success(pkg, '包裹创建成功'));
   } catch (err) {
     console.error('创建包裹失败:', err);
@@ -64,11 +83,20 @@ router.put('/:id/assign', async (req, res) => {
     if (!isCourierOnDuty(courier)) {
       return res.status(400).json(fail('该快递小哥当前不在岗，无法分配'));
     }
+    if (pkg.zone_id) {
+      const inZone = await isCourierInZone(courier_id, pkg.zone_id);
+      if (!inZone) {
+        return res.status(400).json(fail('该快递小哥不负责此包裹的配送区域，无法分配'));
+      }
+    }
     await runAsync(
       `UPDATE package SET courier_id = ?, status = 'ASSIGNED', updated_at = datetime('now','localtime') WHERE id = ?`,
       [courier_id, id]
     );
-    const updated = await getAsync('SELECT * FROM package WHERE id = ?', [id]);
+    const updated = await getAsync(
+      'SELECT p.*, s.name as site_name, dz.name as zone_name, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id LEFT JOIN courier c ON p.courier_id = c.id WHERE p.id = ?',
+      [id]
+    );
     res.json(success(updated, '包裹已分配给快递小哥'));
   } catch (err) {
     console.error('分配包裹失败:', err);
@@ -141,11 +169,11 @@ router.put('/:id/status', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { status, courier_id, tracking_no, receiver_phone, receiver_address } = req.query;
+    const { status, courier_id, tracking_no, receiver_phone, receiver_address, site_id, zone_id } = req.query;
     const { page, pageSize, offset } = parsePaginationParams(req.query);
 
     let countSql = 'SELECT COUNT(*) as total FROM package p WHERE 1=1';
-    let dataSql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN courier c ON p.courier_id = c.id WHERE 1=1';
+    let dataSql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN courier c ON p.courier_id = c.id LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE 1=1';
     const params = [];
 
     if (status) {
@@ -173,6 +201,16 @@ router.get('/', async (req, res) => {
       dataSql += ' AND p.receiver_address LIKE ?';
       params.push(`%${receiver_address}%`);
     }
+    if (site_id) {
+      countSql += ' AND p.site_id = ?';
+      dataSql += ' AND p.site_id = ?';
+      params.push(site_id);
+    }
+    if (zone_id) {
+      countSql += ' AND p.zone_id = ?';
+      dataSql += ' AND p.zone_id = ?';
+      params.push(zone_id);
+    }
 
     dataSql += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
 
@@ -192,7 +230,7 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const pkg = await getAsync(
-      'SELECT p.*, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN courier c ON p.courier_id = c.id WHERE p.id = ?',
+      'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN courier c ON p.courier_id = c.id LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
       [id]
     );
     if (!pkg) {
