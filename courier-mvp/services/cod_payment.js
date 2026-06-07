@@ -161,7 +161,15 @@ async function listCodPayments({ courier_id, start_date, end_date, payment_metho
 }
 
 async function getCourierDailyCodSummary(courierId, date = null) {
-  const dateFilter = date ? date : "date('now','localtime')";
+  let dateCondition, dateParams;
+  if (date) {
+    dateCondition = 'date(cp.created_at) = date(?)';
+    dateParams = [date];
+  } else {
+    dateCondition = "date(cp.created_at) = date('now','localtime')";
+    dateParams = [];
+  }
+
   const summary = await getAsync(
     `SELECT
        COUNT(*) as total_packages,
@@ -172,16 +180,16 @@ async function getCourierDailyCodSummary(courierId, date = null) {
        COALESCE(SUM(p.cod_amount), 0) as total_due
      FROM cod_payment cp
      LEFT JOIN package p ON cp.package_id = p.id
-     WHERE cp.courier_id = ? AND date(cp.created_at) = ${dateFilter}`,
-    [courierId]
+     WHERE cp.courier_id = ? AND ${dateCondition}`,
+    [courierId, ...dateParams]
   );
 
   const methodBreakdown = await allAsync(
     `SELECT cp.payment_method, COUNT(*) as count, COALESCE(SUM(cp.amount), 0) as amount
      FROM cod_payment cp
-     WHERE cp.courier_id = ? AND date(cp.created_at) = ${dateFilter}
+     WHERE cp.courier_id = ? AND ${dateCondition}
      GROUP BY cp.payment_method`,
-    [courierId]
+    [courierId, ...dateParams]
   );
 
   return {
@@ -229,7 +237,7 @@ async function getCodSettlementReport({ courier_id, site_id, start_date, end_dat
     params.push(end_date);
   }
 
-  sql += ' GROUP BY date(cp.created_at), cp.courier_id ORDER BY settlement_date DESC, cp.courier_id ASC';
+  sql += ' GROUP BY date(cp.created_at), cp.courier_id, p.site_id ORDER BY settlement_date DESC, cp.courier_id ASC, p.site_id ASC';
   return allAsync(sql, params);
 }
 
