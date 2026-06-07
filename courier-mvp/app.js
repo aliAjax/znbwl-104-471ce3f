@@ -8,6 +8,7 @@ const deliveryReceiptRoutes = require('./routes/delivery_receipt');
 const workstationRoutes = require('./routes/workstation');
 const zoneRoutes = require('./routes/zone');
 const deliveryAppointmentRoutes = require('./routes/delivery_appointment');
+const codPaymentRoutes = require('./routes/cod_payment');
 
 const app = express();
 const PORT = 3000;
@@ -22,6 +23,7 @@ app.use('/api/delivery-receipts', deliveryReceiptRoutes);
 app.use('/api/workstation', workstationRoutes);
 app.use('/api', zoneRoutes);
 app.use('/api/delivery-appointments', deliveryAppointmentRoutes);
+app.use('/api/cod-payments', codPaymentRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -73,6 +75,16 @@ app.get('/', (req, res) => {
       'GET    /api/delivery-appointments/meta': '查询预约相关的枚举元数据',
       'GET    /api/workstation/:courierId/dashboard?appointment_filter=today|overdue|upcoming|no_appointment': '快递小哥工作台总览，支持按预约状态筛选',
       'GET    /api/workstation/:courierId/pending-packages?appointment_filter=today|overdue|upcoming|no_appointment': '快递小哥待处理包裹列表，支持按预约状态筛选，有预约的优先按预约时间排序',
+      'GET    /api/workstation/:courierId/cod/payments': '小哥查询自己的到付收款明细（?start_date=&end_date=&payment_method=）',
+      'GET    /api/workstation/:courierId/cod/summary': '小哥查询自己的到付收款汇总（?date=YYYY-MM-DD，默认今日）',
+      'GET    /api/workstation/:courierId/cod/pending': '小哥查询自己待收款的到付包裹列表',
+      'POST   /api/cod-payments': '记录到付收款 (body: {package_id, courier_id, payment_method: CASH|SCAN|WAIVED, amount, waived_reason?, operator_type?, operator_id?, operator_name?, remark?})',
+      'GET    /api/cod-payments': '查询到付收款列表（?courier_id=&start_date=&end_date=&payment_method=&site_id=）',
+      'GET    /api/cod-payments/package/:packageId': '查询某个包裹的到付收款记录',
+      'GET    /api/cod-payments/courier/:courierId/daily-summary': '查询小哥每日到付收款汇总（?date=YYYY-MM-DD）',
+      'GET    /api/cod-payments/courier/:courierId/pending': '查询小哥待收款的到付包裹',
+      'GET    /api/cod-payments/settlement-report': '运营日结报表查询（?courier_id=&site_id=&start_date=&end_date=）',
+      'GET    /api/cod-payments/meta': '查询到付收款相关的枚举元数据',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],
@@ -86,6 +98,7 @@ app.get('/', (req, res) => {
     appointmentChangeTypes: ['CREATE', 'UPDATE', 'CANCEL'],
     deliveryPreferences: ['PERSONAL_SIGN', 'AGENT_SIGN', 'SMART_CABINET', 'DOORSTEP', 'OTHER'],
     appointmentFilterTypes: ['today', 'overdue', 'upcoming', 'no_appointment'],
+    codPaymentMethods: ['CASH', 'SCAN', 'WAIVED'],
   });
 });
 

@@ -1,5 +1,6 @@
 const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
 const { OPERATOR_TYPES, addPackageTrack } = require('./package_track');
+const { getCodPaymentByPackageId } = require('./cod_payment');
 
 const VALID_SIGN_METHODS = [
   'PERSONAL_SIGN',
@@ -46,6 +47,15 @@ async function createDeliveryReceipt({ package_id, courier_id, signer_name, sign
     const err = new Error('该包裹已存在签收凭证，不可重复提交');
     err.statusCode = 400;
     throw err;
+  }
+
+  if (pkg.is_cod) {
+    const codPayment = await getCodPaymentByPackageId(package_id);
+    if (!codPayment) {
+      const err = new Error('该包裹为到付包裹，请先完成收款后再提交签收凭证');
+      err.statusCode = 400;
+      throw err;
+    }
   }
 
   const receiptId = await runInTransaction(async () => {

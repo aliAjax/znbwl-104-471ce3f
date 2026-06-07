@@ -2,6 +2,7 @@ const { allAsync, getAsync, runAsync } = require('../db');
 const { isCourierInZone } = require('./zone');
 const { OPERATOR_TYPES, updatePackageStatusWithTrack } = require('./package_track');
 const { getPackagesWithAppointmentFilter } = require('./delivery_appointment');
+const { getCourierDailyCodSummary, getPendingCodPackagesForCourier } = require('./cod_payment');
 
 const COURIER_STATUSES = {
   ON_DUTY: 'ON_DUTY',
@@ -85,15 +86,19 @@ async function getCourierPendingPackages(courierId, appointmentFilter = null) {
 }
 
 async function getCourierDashboard(courierId, appointmentFilter = null) {
-  const [stats, pendingPackages] = await Promise.all([
+  const [stats, pendingPackages, codSummary, pendingCodPackages] = await Promise.all([
     getCourierDailyStats(courierId),
     getCourierPendingPackages(courierId, appointmentFilter),
+    getCourierDailyCodSummary(courierId),
+    getPendingCodPackagesForCourier(courierId),
   ]);
 
   return {
     courier_id: Number(courierId),
     today_stats: stats,
     pending_packages: pendingPackages,
+    cod_summary: codSummary,
+    pending_cod_packages: pendingCodPackages,
   };
 }
 

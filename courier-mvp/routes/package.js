@@ -3,6 +3,7 @@ const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
 const { success, fail } = require('../utils/response');
 const { parsePaginationParams, buildPaginationResult } = require('../utils/pagination');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
+const { getCodPaymentByPackageId } = require('../services/cod_payment');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { isCourierInZone } = require('../services/zone');
 const { validateBatchAssign, validateDispatch } = require('../utils/validators');
@@ -24,9 +25,17 @@ function generateTrackingNo() {
 
 router.post('/', async (req, res) => {
   try {
-    const { tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, site_id, zone_id } = req.body;
+    const { tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, site_id, zone_id, is_cod, cod_amount } = req.body;
     if (!receiver_name || !receiver_phone) {
       return res.status(400).json(fail('收件人姓名和手机号不能为空'));
+    }
+    const finalIsCod = is_cod ? 1 : 0;
+    let finalCodAmount = Number(cod_amount) || 0;
+    if (finalIsCod && finalCodAmount <= 0) {
+      return res.status(400).json(fail('到付包裹必须填写应收金额，且金额必须大于0'));
+    }
+    if (!finalIsCod) {
+      finalCodAmount = 0;
     }
     let finalSiteId = site_id || null;
     let finalZoneId = zone_id || null;
@@ -55,9 +64,9 @@ router.post('/', async (req, res) => {
     }
     const packageId = await runInTransaction(async () => {
       const result = await runAsync(
-        `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`,
-        [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, finalSiteId, finalZoneId]
+        `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id, is_cod, cod_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?)`,
+        [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, finalSiteId, finalZoneId, finalIsCod, finalCodAmount]
       );
       await addPackageTrack({
         packageId: result.lastID,
@@ -268,13 +277,17 @@ router.get('/:id', async (req, res) => {
     if (!pkg) {
       return res.status(404).json(fail('包裹不存在'));
     }
-    const [receipt, tracks] = await Promise.all([
+    const [receipt, tracks, codPayment] = await Promise.all([
       getDeliveryReceiptByPackageId(id),
       getPackageTracks(id),
+      pkg.is_cod ? getCodPaymentByPackageId(id) : Promise.resolve(null),
     ]);
     const result = { ...pkg };
     if (receipt) {
       result.delivery_receipt = receipt;
+    }
+    if (codPayment) {
+      result.cod_payment = codPayment;
     }
     result.tracks = tracks;
     res.json(success(result));

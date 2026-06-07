@@ -125,6 +125,12 @@ function initDatabase() {
         if (!packageColumns.includes('zone_id')) {
           await runAsync("ALTER TABLE package ADD COLUMN zone_id INTEGER");
         }
+        if (!packageColumns.includes('is_cod')) {
+          await runAsync("ALTER TABLE package ADD COLUMN is_cod INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!packageColumns.includes('cod_amount')) {
+          await runAsync("ALTER TABLE package ADD COLUMN cod_amount REAL NOT NULL DEFAULT 0");
+        }
 
         db.run(`CREATE TABLE IF NOT EXISTS exception_record (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +232,43 @@ function initDatabase() {
           created_at TEXT DEFAULT (datetime('now','localtime')),
           FOREIGN KEY (appointment_id) REFERENCES delivery_appointment(id),
           FOREIGN KEY (package_id) REFERENCES package(id)
+        );`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS cod_payment (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          package_id INTEGER NOT NULL UNIQUE,
+          courier_id INTEGER NOT NULL,
+          payment_method TEXT NOT NULL,
+          amount REAL NOT NULL,
+          waived_reason TEXT,
+          operator_type TEXT NOT NULL,
+          operator_id INTEGER,
+          operator_name TEXT,
+          remark TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (package_id) REFERENCES package(id),
+          FOREIGN KEY (courier_id) REFERENCES courier(id)
+        );`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS cod_daily_settlement (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          settlement_date TEXT NOT NULL,
+          courier_id INTEGER NOT NULL,
+          site_id INTEGER,
+          total_cod_packages INTEGER NOT NULL DEFAULT 0,
+          total_cod_amount REAL NOT NULL DEFAULT 0,
+          cash_amount REAL NOT NULL DEFAULT 0,
+          scan_amount REAL NOT NULL DEFAULT 0,
+          waived_amount REAL NOT NULL DEFAULT 0,
+          settled_packages INTEGER NOT NULL DEFAULT 0,
+          unsettled_packages INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (courier_id) REFERENCES courier(id),
+          FOREIGN KEY (site_id) REFERENCES site(id),
+          UNIQUE(settlement_date, courier_id)
         );`);
 
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
