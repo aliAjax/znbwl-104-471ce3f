@@ -26,6 +26,8 @@ router.post('/', async (req, res) => {
     if (!receiver_name || !receiver_phone) {
       return res.status(400).json(fail('收件人姓名和手机号不能为空'));
     }
+    let finalSiteId = site_id || null;
+    let finalZoneId = zone_id || null;
     if (site_id) {
       const site = await getAsync('SELECT id FROM site WHERE id = ?', [site_id]);
       if (!site) {
@@ -40,6 +42,9 @@ router.post('/', async (req, res) => {
       if (site_id && zone.site_id !== Number(site_id)) {
         return res.status(400).json(fail('该配送区域不属于所选站点'));
       }
+      if (!site_id) {
+        finalSiteId = zone.site_id;
+      }
     }
     const finalTrackingNo = tracking_no || generateTrackingNo();
     const existing = await getAsync('SELECT id FROM package WHERE tracking_no = ?', [finalTrackingNo]);
@@ -49,7 +54,7 @@ router.post('/', async (req, res) => {
     const result = await runAsync(
       `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`,
-      [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, site_id || null, zone_id || null]
+      [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, finalSiteId, finalZoneId]
     );
     const pkg = await getAsync(
       'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
