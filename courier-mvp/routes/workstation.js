@@ -11,6 +11,10 @@ const {
   getCourierDailyCodSummary,
   getPendingCodPackagesForCourier,
 } = require('../services/cod_payment');
+const {
+  previewHandover,
+  executeHandover,
+} = require('../services/handover');
 
 const router = Router();
 
@@ -61,15 +65,28 @@ router.get('/:courierId/pending-packages', async (req, res) => {
 router.put('/:courierId/status', async (req, res) => {
   try {
     const { courierId } = req.params;
-    const { status } = req.body;
+    const { status, allow_handover } = req.body;
     if (!status) {
       return res.status(400).json(fail('状态不能为空'));
     }
-    const updatedCourier = await updateCourierStatus(courierId, status);
+    const options = {};
+    if (allow_handover !== undefined) {
+      options.allow_handover = allow_handover;
+    }
+    const updatedCourier = await updateCourierStatus(courierId, status, options);
     res.json(success(updatedCourier, '快递小哥状态更新成功'));
   } catch (err) {
     if (err.statusCode) {
-      return res.status(err.statusCode).json(fail(err.message));
+      const response = {
+        message: err.message,
+      };
+      if (err.need_handover !== undefined) {
+        response.need_handover = err.need_handover;
+      }
+      if (err.unfinished_count !== undefined) {
+        response.unfinished_count = err.unfinished_count;
+      }
+      return res.status(err.statusCode).json(fail(response));
     }
     console.error('更新快递小哥状态失败:', err);
     res.status(500).json(fail('服务器内部错误'));
@@ -121,6 +138,54 @@ router.get('/:courierId/cod/pending', async (req, res) => {
       return res.status(err.statusCode).json(fail(err.message));
     }
     console.error('查询待收款到付包裹失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/:courierId/handover/preview', async (req, res) => {
+  try {
+    const { courierId } = req.params;
+    const { package_ids } = req.query;
+    let packageIds = null;
+    if (package_ids) {
+      packageIds = Array.isArray(package_ids)
+        ? package_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+        : package_ids.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    }
+    const preview = await previewHandover(parseInt(courierId, 10), packageIds);
+    res.json(success(preview, '交接预览成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('交接预览失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.post('/:courierId/handover/execute', async (req, res) => {
+  try {
+    const { courierId } = req.params;
+    const { package_ids, target_courier_id, operator_name } = req.body;
+    if (!package_ids || !Array.isArray(package_ids) || package_ids.length === 0) {
+      return res.status(400).json(fail('请选择需要交接的包裹'));
+    }
+    const packageIds = package_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    if (packageIds.length === 0) {
+      return res.status(400).json(fail('包裹ID格式无效'));
+    }
+    const result = await executeHandover(
+      parseInt(courierId, 10),
+      packageIds,
+      target_courier_id ? parseInt(target_courier_id, 10) : null,
+      operator_name
+    );
+    res.json(success(result, '交接执行完成'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('执行交接失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });

@@ -79,6 +79,8 @@ app.get('/', (req, res) => {
       'GET    /api/workstation/:courierId/cod/payments': '小哥查询自己的到付收款明细（?start_date=&end_date=&payment_method=）',
       'GET    /api/workstation/:courierId/cod/summary': '小哥查询自己的到付收款汇总（?date=YYYY-MM-DD，默认今日）',
       'GET    /api/workstation/:courierId/cod/pending': '小哥查询自己待收款的到付包裹列表',
+      'GET    /api/workstation/:courierId/handover/preview': '交接班预览 (?package_ids=1,2,3)，校验每个包裹并推荐同区域在岗小哥',
+      'POST   /api/workstation/:courierId/handover/execute': '执行交接班 (body: {package_ids: [1,2,3], target_courier_id?: 2, operator_name?: "张三"})，每个包裹独立返回成功/失败原因',
       'POST   /api/cod-payments': '记录到付收款 (body: {package_id, courier_id, payment_method: CASH|SCAN|WAIVED, amount, waived_reason?, operator_type?, operator_id?, operator_name?, remark?})',
       'GET    /api/cod-payments': '查询到付收款列表（?courier_id=&start_date=&end_date=&payment_method=&site_id=）',
       'GET    /api/cod-payments/package/:packageId': '查询某个包裹的到付收款记录',
