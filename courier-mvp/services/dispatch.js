@@ -168,7 +168,7 @@ async function previewDispatch(packageIds) {
     normalizedIds = [normalizedIds];
   }
 
-  const seenIds = [...new Set(normalizedIds.filter(id => id !== null && id !== undefined))];
+  const seenIds = [...new Set(normalizedIds)];
 
   for (const packageId of seenIds) {
     try {

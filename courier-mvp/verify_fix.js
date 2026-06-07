@@ -47,6 +47,9 @@ function makeRequest(method, path, data) {
   const r5 = await makeRequest('POST', '/api/packages/dispatch/preview', { package_ids: [1], operator_name: 12345 });
   console.log('operator_name=数字:', r5.statusCode, '-', r5.body.message || '');
 
+  const r6 = await makeRequest('POST', '/api/packages/dispatch/preview', { package_ids: [null] });
+  console.log('package_ids=[null]:', r6.statusCode, '- total:', r6.body.data?.summary?.total, 'data_error:', r6.body.data?.summary?.data_error);
+
   console.log('\n✅ 2. 站点隔离逻辑验证');
   console.log('-'.repeat(60));
 

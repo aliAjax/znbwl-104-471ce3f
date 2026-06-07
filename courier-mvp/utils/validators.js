@@ -48,8 +48,7 @@ function validateDispatch(body) {
     return { valid: false, message: `单次智能分派不超过${DISPATCH_MAX_COUNT}个包裹` };
   }
 
-  const validIds = package_ids.filter(id => id !== null && id !== undefined);
-  const uniqueIds = [...new Set(validIds)];
+  const uniqueIds = [...new Set(package_ids)];
 
   if (operator_name !== undefined && typeof operator_name !== 'string') {
     return { valid: false, message: 'operator_name 必须为字符串类型' };

@@ -178,6 +178,15 @@ async function runBoundaryTests() {
     console.log('  状态码:', r7.statusCode);
     console.log('  处理后总数:', r7.body.data.summary.total);
     console.log('  成功数:', r7.body.data.summary.success);
+    console.log('  数据异常:', r7.body.data.summary.data_error, '(应该为 1)');
+
+    console.log('\n3.7.1 测试仅包含 null 的 ID 数组...');
+    const r7OnlyNull = await makeRequest('POST', '/api/packages/dispatch/preview', {
+      package_ids: [null],
+    });
+    console.log('  状态码:', r7OnlyNull.statusCode);
+    console.log('  处理后总数:', r7OnlyNull.body.data.summary.total, '(应该为 1)');
+    console.log('  数据异常:', r7OnlyNull.body.data.summary.data_error, '(应该为 1)');
 
     console.log('\n3.8 测试包含重复 ID 的数组...');
     const r8 = await makeRequest('POST', '/api/packages/dispatch/preview', {
