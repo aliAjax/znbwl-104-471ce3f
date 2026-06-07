@@ -297,42 +297,6 @@ function buildCodSummary(pkg, codPayment) {
   return summary;
 }
 
-async function getCodSummaryByPackageId(packageId) {
-  const pkg = await getAsync('SELECT is_cod, cod_amount FROM package WHERE id = ?', [packageId]);
-  if (!pkg || !pkg.is_cod) {
-    return null;
-  }
-  const codPayment = await getCodPaymentByPackageId(packageId);
-  return buildCodSummary(pkg, codPayment);
-}
-
-async function getCodSummariesForPackageIds(packageIds) {
-  if (!packageIds || packageIds.length === 0) {
-    return {};
-  }
-  const placeholders = packageIds.map(() => '?').join(',');
-  const rows = await allAsync(
-    `SELECT p.id as package_id, p.is_cod, p.cod_amount,
-            cp.id as payment_id, cp.payment_method, cp.amount, cp.waived_reason, cp.created_at, cp.operator_name
-     FROM package p
-     LEFT JOIN cod_payment cp ON p.id = cp.package_id
-     WHERE p.id IN (${placeholders})`,
-    packageIds
-  );
-  const result = {};
-  for (const row of rows) {
-    const codPayment = row.payment_id ? {
-      payment_method: row.payment_method,
-      amount: row.amount,
-      waived_reason: row.waived_reason,
-      created_at: row.created_at,
-      operator_name: row.operator_name,
-    } : null;
-    result[row.package_id] = buildCodSummary(row, codPayment);
-  }
-  return result;
-}
-
 module.exports = {
   PAYMENT_METHODS,
   VALID_PAYMENT_METHODS,
@@ -347,6 +311,4 @@ module.exports = {
   getPendingCodPackagesForCourier,
   getCodPaymentStatus,
   buildCodSummary,
-  getCodSummaryByPackageId,
-  getCodSummariesForPackageIds,
 };
