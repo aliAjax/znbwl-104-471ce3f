@@ -267,36 +267,6 @@ async function getPendingCodPackagesForCourier(courierId) {
   );
 }
 
-function getCodPaymentStatus(codPayment) {
-  if (!codPayment) {
-    return COD_PAYMENT_STATUSES.UNPAID;
-  }
-  if (codPayment.payment_method === PAYMENT_METHODS.WAIVED) {
-    return COD_PAYMENT_STATUSES.WAIVED;
-  }
-  return COD_PAYMENT_STATUSES.PAID;
-}
-
-function buildCodSummary(pkg, codPayment) {
-  if (!pkg.is_cod) {
-    return null;
-  }
-  const status = getCodPaymentStatus(codPayment);
-  const summary = {
-    is_cod: true,
-    cod_amount: pkg.cod_amount,
-    payment_status: status,
-  };
-  if (codPayment) {
-    summary.payment_method = codPayment.payment_method;
-    summary.paid_amount = codPayment.amount;
-    summary.waived_reason = codPayment.waived_reason || null;
-    summary.paid_at = codPayment.created_at;
-    summary.paid_by = codPayment.operator_name || null;
-  }
-  return summary;
-}
-
 module.exports = {
   PAYMENT_METHODS,
   VALID_PAYMENT_METHODS,
@@ -309,6 +279,4 @@ module.exports = {
   getCourierDailyCodSummary,
   getCodSettlementReport,
   getPendingCodPackagesForCourier,
-  getCodPaymentStatus,
-  buildCodSummary,
 };
