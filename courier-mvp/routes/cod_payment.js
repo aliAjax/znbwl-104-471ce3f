@@ -8,6 +8,9 @@ const {
   getCourierDailyCodSummary,
   getCodSettlementReport,
   getPendingCodPackagesForCourier,
+  generateDailySettlement,
+  listDailySettlements,
+  getDailySettlementDetail,
   VALID_PAYMENT_METHODS,
 } = require('../services/cod_payment');
 const { OPERATOR_TYPES } = require('../services/package_track');
@@ -115,6 +118,61 @@ router.get('/settlement-report', async (req, res) => {
       return res.status(err.statusCode).json(fail(err.message));
     }
     console.error('查询日结报表失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.post('/daily-settlements', async (req, res) => {
+  try {
+    const { courier_id, settlement_date, operator_name } = req.body;
+    if (!courier_id) {
+      return res.status(400).json(fail('courier_id 为必填项'));
+    }
+    const settlement = await generateDailySettlement({
+      courier_id,
+      settlement_date,
+      operator_name,
+    });
+    res.status(201).json(success(settlement, '日结单生成成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('生成日结单失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/daily-settlements', async (req, res) => {
+  try {
+    const { courier_id, site_id, start_date, end_date, status } = req.query;
+    const settlements = await listDailySettlements({
+      courier_id,
+      site_id,
+      start_date,
+      end_date,
+      status,
+    });
+    res.json(success(settlements, '日结单列表查询成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('查询日结单列表失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/daily-settlements/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const detail = await getDailySettlementDetail(id);
+    res.json(success(detail, '日结单详情查询成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('查询日结单详情失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });
