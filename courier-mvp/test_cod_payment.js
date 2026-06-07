@@ -656,15 +656,19 @@ async function runTests() {
     }
     console.log('='.repeat(60));
 
-    process.exitCode = failedCount > 0 ? 1 : 0;
+    return failedCount === 0;
 
   } catch (err) {
-    console.error('测试执行出错:', err.message);
+    console.error('💥 测试执行异常:', err.message);
     console.error(err.stack);
-    process.exitCode = 1;
+    return false;
   } finally {
     await cleanupAllTestData();
   }
 }
 
-runTests();
+async function main() {
+  const success = await runTests();
+  process.exit(success ? 0 : 1);
+}
+main();

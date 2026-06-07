@@ -215,13 +215,17 @@ async function runTests() {
     }
     console.log('='.repeat(60));
 
-    process.exit(failCount > 0 ? 1 : 0);
+    return failCount === 0;
 
   } catch (err) {
-    console.error('测试执行出错:', err.message);
+    console.error('💥 测试执行异常:', err.message);
     console.error(err.stack);
-    process.exit(1);
+    return false;
   }
 }
 
-runTests();
+async function main() {
+  const success = await runTests();
+  process.exit(success ? 0 : 1);
+}
+main();
