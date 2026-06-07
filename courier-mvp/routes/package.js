@@ -9,6 +9,7 @@ const { isCourierInZone } = require('../services/zone');
 const { validateBatchAssign, validateDispatch } = require('../utils/validators');
 const { OPERATOR_TYPES, addPackageTrack, getPackageTracks, updatePackageStatusWithTrack } = require('../services/package_track');
 const { previewDispatch, confirmDispatch } = require('../services/dispatch');
+const { getAppointmentSummaryForPackage } = require('../services/delivery_appointment');
 
 const router = Router();
 
@@ -340,10 +341,11 @@ router.get('/:id', async (req, res) => {
     if (!pkg) {
       return res.status(404).json(fail('包裹不存在'));
     }
-    const [receipt, tracks, codPayment] = await Promise.all([
+    const [receipt, tracks, codPayment, appointment] = await Promise.all([
       getDeliveryReceiptByPackageId(id),
       getPackageTracks(id),
       pkg.is_cod ? getCodPaymentByPackageId(id) : Promise.resolve(null),
+      getAppointmentSummaryForPackage(id),
     ]);
     const result = { ...pkg };
     if (receipt) {
@@ -351,6 +353,9 @@ router.get('/:id', async (req, res) => {
     }
     if (codPayment) {
       result.cod_payment = codPayment;
+    }
+    if (appointment) {
+      result.appointment = appointment;
     }
     result.tracks = tracks;
     res.json(success(result));

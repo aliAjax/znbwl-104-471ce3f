@@ -409,6 +409,62 @@ async function getAppointmentChangeLogs(packageId) {
   });
 }
 
+async function getAppointmentSummaryForPackage(packageId) {
+  if (!packageId) {
+    return null;
+  }
+
+  const appointment = await getAsync(
+    `SELECT * FROM delivery_appointment WHERE package_id = ?`,
+    [packageId]
+  );
+
+  if (!appointment) {
+    return null;
+  }
+
+  const latestLog = await getAsync(
+    `SELECT * FROM delivery_appointment_change_log
+     WHERE package_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    [packageId]
+  );
+
+  if (appointment.status === APPOINTMENT_STATUSES.ACTIVE) {
+    return {
+      status: appointment.status,
+      appointment_start: appointment.appointment_start,
+      appointment_end: appointment.appointment_end,
+      delivery_preference: appointment.delivery_preference,
+      remark: appointment.remark,
+      latest_change_reason: latestLog ? latestLog.change_reason : null,
+      latest_change_at: latestLog ? latestLog.created_at : null,
+      latest_change_by: latestLog ? latestLog.operator_name : null,
+    };
+  }
+
+  if (appointment.status === APPOINTMENT_STATUSES.CANCELLED) {
+    const cancelLog = await getAsync(
+      `SELECT * FROM delivery_appointment_change_log
+       WHERE package_id = ? AND change_type = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [packageId, CHANGE_TYPES.CANCEL]
+    );
+    return {
+      status: appointment.status,
+      cancelled_at: cancelLog ? cancelLog.created_at : appointment.updated_at,
+      cancelled_by: cancelLog ? cancelLog.operator_name : null,
+      cancel_reason: cancelLog ? cancelLog.change_reason : null,
+    };
+  }
+
+  return {
+    status: appointment.status,
+  };
+}
+
 async function getPackagesWithAppointmentFilter(courierId, filterType) {
   if (!courierId) {
     const err = new Error('快递小哥ID不能为空');
@@ -473,6 +529,7 @@ module.exports = {
   cancelAppointment,
   getAppointmentByPackageId,
   getAppointmentChangeLogs,
+  getAppointmentSummaryForPackage,
   getPackagesWithAppointmentFilter,
   canModifyAppointment,
 };
