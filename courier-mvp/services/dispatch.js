@@ -98,11 +98,59 @@ async function validatePackageForDispatch(packageId) {
   return { valid: true, pkg, errors };
 }
 
+async function getCourierZoneMatchDetails(courierId, pkg) {
+  const result = {
+    match_level: 'none',
+    match_description: '不匹配',
+    matched_zones: [],
+  };
+
+  const courierZones = await allAsync(
+    `SELECT dz.*, s.name as site_name FROM courier_zone cz
+     LEFT JOIN delivery_zone dz ON cz.zone_id = dz.id
+     LEFT JOIN site s ON dz.site_id = s.id
+     WHERE cz.courier_id = ?`,
+    [courierId]
+  );
+
+  if (pkg.zone_id) {
+    const exactMatch = courierZones.find(z => z.id === pkg.zone_id);
+    if (exactMatch) {
+      result.match_level = 'exact';
+      result.match_description = `精确匹配区域【${exactMatch.name}】`;
+      result.matched_zones = [exactMatch.name];
+      return result;
+    }
+  }
+
+  if (pkg.site_id) {
+    const siteMatchedZones = courierZones.filter(z => z.site_id === pkg.site_id);
+    if (siteMatchedZones.length > 0) {
+      result.match_level = 'site';
+      result.match_description = `匹配站点【${pkg.site_name || pkg.site_id}】下 ${siteMatchedZones.length} 个区域`;
+      result.matched_zones = siteMatchedZones.map(z => z.name);
+      return result;
+    }
+  }
+
+  if (courierZones.length > 0) {
+    result.match_level = 'global';
+    result.match_description = `全局匹配，小哥负责 ${courierZones.length} 个区域`;
+    result.matched_zones = courierZones.map(z => z.name);
+  } else {
+    result.match_level = 'global';
+    result.match_description = '全局匹配，小哥未分配区域';
+    result.matched_zones = [];
+  }
+
+  return result;
+}
+
 async function findBestCourierForPackage(pkg) {
   const reasons = [];
 
   if (!pkg) {
-    return { courier: null, reasons: ['包裹不存在'] };
+    return { courier: null, reasons: ['包裹不存在'], candidates: [] };
   }
 
   const availableCouriers = await getAvailableCouriersBySiteAndZone(pkg.site_id, pkg.zone_id);
@@ -115,7 +163,7 @@ async function findBestCourierForPackage(pkg) {
     } else {
       reasons.push('系统暂无在岗快递小哥');
     }
-    return { courier: null, reasons };
+    return { courier: null, reasons, candidates: [] };
   }
 
   if (!pkg.zone_id && !pkg.site_id) {
@@ -124,10 +172,25 @@ async function findBestCourierForPackage(pkg) {
     reasons.push(`包裹无配送区域信息，从站点【${pkg.site_name || pkg.site_id}】下所有区域的在岗小哥中选择负载最低的`);
   }
 
+  const candidates = [];
+  for (const courier of availableCouriers) {
+    const zoneMatch = await getCourierZoneMatchDetails(courier.id, pkg);
+    candidates.push({
+      id: courier.id,
+      name: courier.name,
+      phone: courier.phone,
+      status: courier.status,
+      is_on_duty: courier.status === 'ON_DUTY',
+      unfinished_count: courier.unfinished_count,
+      zone_match: zoneMatch,
+    });
+  }
+
   return {
     courier: availableCouriers[0],
     reasons,
     candidate_count: availableCouriers.length,
+    candidates,
   };
 }
 
@@ -148,6 +211,9 @@ function buildDispatchResult(packageId, type, success, reason, options = {}) {
   }
   if (options.candidate_count !== undefined) {
     result.candidate_count = options.candidate_count;
+  }
+  if (options.candidates) {
+    result.candidates = options.candidates;
   }
 
   return result;
@@ -205,7 +271,7 @@ async function previewDispatch(packageIds) {
       }
 
       const pkg = validation.pkg;
-      const { courier, reasons, candidate_count } = await findBestCourierForPackage(pkg);
+      const { courier, reasons, candidate_count, candidates } = await findBestCourierForPackage(pkg);
 
       if (!courier) {
         results.push(buildDispatchResult(
@@ -222,6 +288,7 @@ async function previewDispatch(packageIds) {
               has_site_id: !!pkg.site_id,
               has_zone_id: !!pkg.zone_id,
             },
+            candidates,
           }
         ));
         continue;
@@ -249,6 +316,7 @@ async function previewDispatch(packageIds) {
             unfinished_count: courier.unfinished_count,
           },
           candidate_count,
+          candidates,
         }
       ));
     } catch (err) {
