@@ -267,12 +267,14 @@ async function getPendingCodPackagesForCourier(courierId) {
   );
 }
 
-async function calculateDailySettlementData(courierId, settlementDate) {
-  const dateCondition = 'date(cp.created_at) = date(?)';
-  const dateParams = [settlementDate];
+async function calculateDailySettlementDataBySite(courierId, settlementDate, siteId = null) {
+  const siteCondition = siteId ? 'AND p.site_id = ?' : '';
+  const siteParams = siteId ? [siteId] : [];
 
-  const paidStats = await getAsync(
+  const paidStatsBySite = await allAsync(
     `SELECT
+       p.site_id,
+       s.name as site_name,
        COUNT(*) as paid_packages,
        COALESCE(SUM(CASE WHEN cp.payment_method = 'CASH' THEN cp.amount ELSE 0 END), 0) as cash_amount,
        COALESCE(SUM(CASE WHEN cp.payment_method = 'SCAN' THEN cp.amount ELSE 0 END), 0) as scan_amount,
@@ -281,56 +283,108 @@ async function calculateDailySettlementData(courierId, settlementDate) {
        COALESCE(SUM(p.cod_amount), 0) as total_paid_cod_amount
      FROM cod_payment cp
      LEFT JOIN package p ON cp.package_id = p.id
-     WHERE cp.courier_id = ? AND ${dateCondition}`,
-    [courierId, ...dateParams]
+     LEFT JOIN site s ON p.site_id = s.id
+     WHERE cp.courier_id = ? AND date(cp.created_at) = date(?) ${siteCondition}
+     GROUP BY p.site_id, s.name`,
+    [courierId, settlementDate, ...siteParams]
   );
 
-  const unpaidStats = await getAsync(
+  const unpaidStatsBySite = await allAsync(
     `SELECT
+       p.site_id,
+       s.name as site_name,
        COUNT(*) as unpaid_packages,
        COALESCE(SUM(p.cod_amount), 0) as total_unpaid_cod_amount
      FROM package p
      LEFT JOIN cod_payment cp ON p.id = cp.package_id
+     LEFT JOIN site s ON p.site_id = s.id
      WHERE p.courier_id = ?
        AND p.is_cod = 1
        AND cp.id IS NULL
-       AND date(p.updated_at) = date(?)`,
-    [courierId, settlementDate]
+       AND date(p.updated_at) = date(?)
+       ${siteCondition}
+     GROUP BY p.site_id, s.name`,
+    [courierId, settlementDate, ...siteParams]
   );
 
-  const siteInfo = await getAsync(
-    `SELECT DISTINCT p.site_id, s.name as site_name
-     FROM package p
-     LEFT JOIN site s ON p.site_id = s.id
-     WHERE p.courier_id = ?
-       AND (
-         (p.id IN (SELECT package_id FROM cod_payment WHERE courier_id = ? AND date(created_at) = date(?)))
-         OR
-         (p.is_cod = 1 AND p.id NOT IN (SELECT package_id FROM cod_payment) AND date(p.updated_at) = date(?))
-       )
-     LIMIT 1`,
-    [courierId, courierId, settlementDate, settlementDate]
-  );
+  const siteMap = {};
 
-  const totalCodPackages = (paidStats.paid_packages || 0) + (unpaidStats.unpaid_packages || 0);
-  const totalCodAmount = (paidStats.total_paid_cod_amount || 0) + (unpaidStats.total_unpaid_cod_amount || 0);
+  for (const stat of paidStatsBySite) {
+    const key = stat.site_id || 'null';
+    if (!siteMap[key]) {
+      siteMap[key] = {
+        site_id: stat.site_id,
+        site_name: stat.site_name,
+        paid_packages: 0,
+        unpaid_packages: 0,
+        cash_amount: 0,
+        scan_amount: 0,
+        waived_amount: 0,
+        total_paid_cod_amount: 0,
+        total_unpaid_cod_amount: 0,
+      };
+    }
+    siteMap[key].paid_packages += stat.paid_packages;
+    siteMap[key].cash_amount += stat.cash_amount;
+    siteMap[key].scan_amount += stat.scan_amount;
+    siteMap[key].waived_amount += stat.waived_amount;
+    siteMap[key].total_paid_cod_amount += stat.total_paid_cod_amount;
+  }
 
-  return {
+  for (const stat of unpaidStatsBySite) {
+    const key = stat.site_id || 'null';
+    if (!siteMap[key]) {
+      siteMap[key] = {
+        site_id: stat.site_id,
+        site_name: stat.site_name,
+        paid_packages: 0,
+        unpaid_packages: 0,
+        cash_amount: 0,
+        scan_amount: 0,
+        waived_amount: 0,
+        total_paid_cod_amount: 0,
+        total_unpaid_cod_amount: 0,
+      };
+    }
+    siteMap[key].unpaid_packages += stat.unpaid_packages;
+    siteMap[key].total_unpaid_cod_amount += stat.total_unpaid_cod_amount;
+  }
+
+  const results = Object.values(siteMap).map(data => ({
     settlement_date: settlementDate,
     courier_id: courierId,
-    site_id: siteInfo ? siteInfo.site_id : null,
-    site_name: siteInfo ? siteInfo.site_name : null,
-    total_cod_packages: totalCodPackages,
-    total_cod_amount: totalCodAmount,
-    cash_amount: paidStats.cash_amount || 0,
-    scan_amount: paidStats.scan_amount || 0,
-    waived_amount: paidStats.waived_amount || 0,
-    settled_packages: paidStats.paid_packages || 0,
-    unsettled_packages: unpaidStats.unpaid_packages || 0,
-  };
+    site_id: data.site_id,
+    site_name: data.site_name,
+    total_cod_packages: data.paid_packages + data.unpaid_packages,
+    total_cod_amount: data.total_paid_cod_amount + data.total_unpaid_cod_amount,
+    cash_amount: data.cash_amount,
+    scan_amount: data.scan_amount,
+    waived_amount: data.waived_amount,
+    settled_packages: data.paid_packages,
+    unsettled_packages: data.unpaid_packages,
+  }));
+
+  if (siteId && results.length === 0) {
+    const siteInfo = await getAsync('SELECT name FROM site WHERE id = ?', [siteId]);
+    return [{
+      settlement_date: settlementDate,
+      courier_id: courierId,
+      site_id: siteId,
+      site_name: siteInfo ? siteInfo.name : null,
+      total_cod_packages: 0,
+      total_cod_amount: 0,
+      cash_amount: 0,
+      scan_amount: 0,
+      waived_amount: 0,
+      settled_packages: 0,
+      unsettled_packages: 0,
+    }];
+  }
+
+  return results;
 }
 
-async function generateDailySettlement({ courier_id, settlement_date, operator_name }) {
+async function generateDailySettlement({ courier_id, settlement_date, site_id, operator_name }) {
   const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courier_id]);
   if (!courier) {
     const err = new Error('快递小哥不存在');
@@ -338,67 +392,81 @@ async function generateDailySettlement({ courier_id, settlement_date, operator_n
     throw err;
   }
 
-  const settlementDate = settlement_date || new Date().toISOString().split('T')[0];
-
-  const settlementData = await calculateDailySettlementData(courier_id, settlementDate);
-
-  const existingSettlement = await getAsync(
-    'SELECT id FROM cod_daily_settlement WHERE settlement_date = date(?) AND courier_id = ?',
-    [settlementDate, courier_id]
-  );
-
-  let settlementId;
-  if (existingSettlement) {
-    await runAsync(
-      `UPDATE cod_daily_settlement SET
-         site_id = ?,
-         total_cod_packages = ?,
-         total_cod_amount = ?,
-         cash_amount = ?,
-         scan_amount = ?,
-         waived_amount = ?,
-         settled_packages = ?,
-         unsettled_packages = ?,
-         updated_at = datetime('now','localtime')
-       WHERE id = ?`,
-      [
-        settlementData.site_id,
-        settlementData.total_cod_packages,
-        settlementData.total_cod_amount,
-        settlementData.cash_amount,
-        settlementData.scan_amount,
-        settlementData.waived_amount,
-        settlementData.settled_packages,
-        settlementData.unsettled_packages,
-        existingSettlement.id,
-      ]
-    );
-    settlementId = existingSettlement.id;
-  } else {
-    const result = await runAsync(
-      `INSERT INTO cod_daily_settlement (
-         settlement_date, courier_id, site_id,
-         total_cod_packages, total_cod_amount,
-         cash_amount, scan_amount, waived_amount,
-         settled_packages, unsettled_packages, status
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'GENERATED')`,
-      [
-        settlementDate,
-        courier_id,
-        settlementData.site_id,
-        settlementData.total_cod_packages,
-        settlementData.total_cod_amount,
-        settlementData.cash_amount,
-        settlementData.scan_amount,
-        settlementData.waived_amount,
-        settlementData.settled_packages,
-        settlementData.unsettled_packages,
-      ]
-    );
-    settlementId = result.lastID;
+  if (site_id) {
+    const site = await getAsync('SELECT * FROM site WHERE id = ?', [site_id]);
+    if (!site) {
+      const err = new Error('站点不存在');
+      err.statusCode = 404;
+      throw err;
+    }
   }
 
-  return getDailySettlementById(settlementId);
+  const settlementDate = settlement_date || new Date().toISOString().split('T')[0];
+
+  const settlementDataList = await calculateDailySettlementDataBySite(courier_id, settlementDate, site_id);
+
+  const results = [];
+
+  for (const settlementData of settlementDataList) {
+    const existingSettlement = await getAsync(
+      'SELECT id FROM cod_daily_settlement WHERE settlement_date = date(?) AND courier_id = ? AND (site_id = ? OR (site_id IS NULL AND ? IS NULL))',
+      [settlementDate, courier_id, settlementData.site_id, settlementData.site_id]
+    );
+
+    let settlementId;
+    if (existingSettlement) {
+      await runAsync(
+        `UPDATE cod_daily_settlement SET
+           total_cod_packages = ?,
+           total_cod_amount = ?,
+           cash_amount = ?,
+           scan_amount = ?,
+           waived_amount = ?,
+           settled_packages = ?,
+           unsettled_packages = ?,
+           updated_at = datetime('now','localtime')
+         WHERE id = ?`,
+        [
+          settlementData.total_cod_packages,
+          settlementData.total_cod_amount,
+          settlementData.cash_amount,
+          settlementData.scan_amount,
+          settlementData.waived_amount,
+          settlementData.settled_packages,
+          settlementData.unsettled_packages,
+          existingSettlement.id,
+        ]
+      );
+      settlementId = existingSettlement.id;
+    } else {
+      const result = await runAsync(
+        `INSERT INTO cod_daily_settlement (
+           settlement_date, courier_id, site_id,
+           total_cod_packages, total_cod_amount,
+           cash_amount, scan_amount, waived_amount,
+           settled_packages, unsettled_packages, status
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'GENERATED')`,
+        [
+          settlementDate,
+          courier_id,
+          settlementData.site_id,
+          settlementData.total_cod_packages,
+          settlementData.total_cod_amount,
+          settlementData.cash_amount,
+          settlementData.scan_amount,
+          settlementData.waived_amount,
+          settlementData.settled_packages,
+          settlementData.unsettled_packages,
+        ]
+      );
+      settlementId = result.lastID;
+    }
+
+    const saved = await getDailySettlementById(settlementId);
+    results.push(saved);
+  }
+
+  return results;
 }
 
 async function getDailySettlementById(id) {
@@ -441,7 +509,7 @@ async function listDailySettlements({ courier_id, site_id, start_date, end_date,
     params.push(status);
   }
 
-  sql += ' ORDER BY ds.settlement_date DESC, ds.courier_id ASC';
+  sql += ' ORDER BY ds.settlement_date DESC, ds.courier_id ASC, ds.site_id ASC';
   return allAsync(sql, params);
 }
 
@@ -453,13 +521,16 @@ async function getDailySettlementDetail(id) {
     throw err;
   }
 
+  const siteCondition = settlement.site_id ? 'AND p.site_id = ?' : 'AND p.site_id IS NULL';
+  const siteParams = settlement.site_id ? [settlement.site_id] : [];
+
   const paidPackages = await allAsync(
     `SELECT cp.*, p.tracking_no, p.receiver_name, p.receiver_phone, p.cod_amount
      FROM cod_payment cp
      LEFT JOIN package p ON cp.package_id = p.id
-     WHERE cp.courier_id = ? AND date(cp.created_at) = date(?)
+     WHERE cp.courier_id = ? AND date(cp.created_at) = date(?) ${siteCondition}
      ORDER BY cp.created_at DESC`,
-    [settlement.courier_id, settlement.settlement_date]
+    [settlement.courier_id, settlement.settlement_date, ...siteParams]
   );
 
   const unpaidPackages = await allAsync(
@@ -470,8 +541,9 @@ async function getDailySettlementDetail(id) {
        AND p.is_cod = 1
        AND cp.id IS NULL
        AND date(p.updated_at) = date(?)
+       ${siteCondition}
      ORDER BY p.updated_at DESC`,
-    [settlement.courier_id, settlement.settlement_date]
+    [settlement.courier_id, settlement.settlement_date, ...siteParams]
   );
 
   return {

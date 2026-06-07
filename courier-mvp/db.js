@@ -268,8 +268,44 @@ function initDatabase() {
           updated_at TEXT DEFAULT (datetime('now','localtime')),
           FOREIGN KEY (courier_id) REFERENCES courier(id),
           FOREIGN KEY (site_id) REFERENCES site(id),
-          UNIQUE(settlement_date, courier_id)
+          UNIQUE(settlement_date, courier_id, site_id)
         );`);
+
+        const settlementIndexes = await allAsync("PRAGMA index_list('cod_daily_settlement')");
+        const hasOldUniqueIndex = settlementIndexes.some(idx => {
+          return idx.name === 'sqlite_autoindex_cod_daily_settlement_1' || 
+                 (idx.unique && idx.origin === 'u');
+        });
+        if (hasOldUniqueIndex) {
+          const indexInfo = await allAsync("PRAGMA index_info(sqlite_autoindex_cod_daily_settlement_1)");
+          const indexColumns = indexInfo.map(col => col.name);
+          if (indexColumns.length === 2 && indexColumns.includes('settlement_date') && indexColumns.includes('courier_id') && !indexColumns.includes('site_id')) {
+            console.log('检测到旧的日结表唯一约束，正在迁移...');
+            await runAsync(`CREATE TABLE IF NOT EXISTS cod_daily_settlement_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              settlement_date TEXT NOT NULL,
+              courier_id INTEGER NOT NULL,
+              site_id INTEGER,
+              total_cod_packages INTEGER NOT NULL DEFAULT 0,
+              total_cod_amount REAL NOT NULL DEFAULT 0,
+              cash_amount REAL NOT NULL DEFAULT 0,
+              scan_amount REAL NOT NULL DEFAULT 0,
+              waived_amount REAL NOT NULL DEFAULT 0,
+              settled_packages INTEGER NOT NULL DEFAULT 0,
+              unsettled_packages INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL DEFAULT 'PENDING',
+              created_at TEXT DEFAULT (datetime('now','localtime')),
+              updated_at TEXT DEFAULT (datetime('now','localtime')),
+              FOREIGN KEY (courier_id) REFERENCES courier(id),
+              FOREIGN KEY (site_id) REFERENCES site(id),
+              UNIQUE(settlement_date, courier_id, site_id)
+            )`);
+            await runAsync(`INSERT OR IGNORE INTO cod_daily_settlement_new SELECT * FROM cod_daily_settlement`);
+            await runAsync(`DROP TABLE cod_daily_settlement`);
+            await runAsync(`ALTER TABLE cod_daily_settlement_new RENAME TO cod_daily_settlement`);
+            console.log('日结表唯一约束迁移完成');
+          }
+        }
 
         db.run(`CREATE TABLE IF NOT EXISTS zone_merge_log (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

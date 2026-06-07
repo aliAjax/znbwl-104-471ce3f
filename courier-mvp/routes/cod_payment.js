@@ -124,16 +124,17 @@ router.get('/settlement-report', async (req, res) => {
 
 router.post('/daily-settlements', async (req, res) => {
   try {
-    const { courier_id, settlement_date, operator_name } = req.body;
+    const { courier_id, settlement_date, site_id, operator_name } = req.body;
     if (!courier_id) {
       return res.status(400).json(fail('courier_id 为必填项'));
     }
-    const settlement = await generateDailySettlement({
+    const settlements = await generateDailySettlement({
       courier_id,
       settlement_date,
+      site_id,
       operator_name,
     });
-    res.status(201).json(success(settlement, '日结单生成成功'));
+    res.status(201).json(success(settlements, '日结单生成成功'));
   } catch (err) {
     if (err.statusCode) {
       return res.status(err.statusCode).json(fail(err.message));
