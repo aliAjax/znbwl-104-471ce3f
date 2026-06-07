@@ -1,7 +1,7 @@
 const http = require('http');
 
-const BASE_URL = 'localhost';
-const PORT = 3000;
+const BASE_URL = process.env.BASE_URL || 'localhost';
+const PORT = process.env.PORT || 3000;
 
 function makeRequest(method, path, data = null) {
   return new Promise((resolve, reject) => {
@@ -312,4 +312,13 @@ async function runBoundaryTests() {
   }
 }
 
-setTimeout(runBoundaryTests, 1500);
+async function main() {
+  try {
+    await runBoundaryTests();
+    process.exit(0);
+  } catch (err) {
+    console.error('测试执行出错:', err.message);
+    process.exit(1);
+  }
+}
+main();

@@ -11,7 +11,7 @@ const deliveryAppointmentRoutes = require('./routes/delivery_appointment');
 const codPaymentRoutes = require('./routes/cod_payment');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -121,4 +121,4 @@ initDatabase()
     process.exit(1);
   });
 
-process.on('SIGINT', closeDatabase);
+process.on('SIGINT', () => closeDatabase(true));

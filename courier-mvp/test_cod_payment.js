@@ -1,8 +1,8 @@
 const http = require('http');
 const { runAsync, allAsync, getAsync } = require('./db');
 
-const BASE_URL = 'localhost';
-const PORT = 3000;
+const BASE_URL = process.env.BASE_URL || 'localhost';
+const PORT = process.env.PORT || 3000;
 const TEST_TRACKING_PREFIX = 'COD-TEST-';
 
 let passedCount = 0;
@@ -667,4 +667,4 @@ async function runTests() {
   }
 }
 
-setTimeout(runTests, 2000);
+runTests();

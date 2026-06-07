@@ -152,8 +152,17 @@ async function testConflictCheck() {
     } catch (cleanupErr) {
       console.error('清理数据时出错:', cleanupErr.message);
     }
-    closeDatabase();
+    await closeDatabase();
   }
 }
 
-testConflictCheck();
+async function main() {
+  try {
+    await testConflictCheck();
+    process.exit(0);
+  } catch (err) {
+    console.error('测试执行出错:', err);
+    process.exit(1);
+  }
+}
+main();

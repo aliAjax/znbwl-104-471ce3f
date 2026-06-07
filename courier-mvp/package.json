@@ -5,7 +5,15 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js"
+    "dev": "node app.js",
+    "test": "node test/runner.js",
+    "test:setup": "node test/setup.js",
+    "test:teardown": "node test/teardown.js",
+    "test:dispatch-plan": "node test/runner.js test_dispatch_plan.js",
+    "test:dispatch": "node test/runner.js test_dispatch.js",
+    "test:dispatch-boundary": "node test/runner.js test_dispatch_boundary.js",
+    "test:appointment-conflict": "node test/runner.js test_appointment_conflict.js",
+    "test:cod-payment": "node test/runner.js test_cod_payment.js"
   },
   "license": "MIT",
   "dependencies": {

@@ -1,7 +1,7 @@
 const http = require('http');
 
-const BASE_URL = 'localhost';
-const PORT = 3000;
+const BASE_URL = process.env.BASE_URL || 'localhost';
+const PORT = process.env.PORT || 3000;
 
 function makeRequest(method, path, data = null) {
   return new Promise((resolve, reject) => {
@@ -224,4 +224,4 @@ async function runTests() {
   }
 }
 
-setTimeout(runTests, 2000);
+runTests();

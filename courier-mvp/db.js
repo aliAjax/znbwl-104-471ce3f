@@ -6,7 +6,7 @@ const DB_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
-const DB_PATH = path.join(DB_DIR, 'courier.db');
+const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'courier.db');
 
 const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) {
@@ -373,11 +373,20 @@ function initDatabase() {
   });
 }
 
-function closeDatabase() {
-  db.close((err) => {
-    if (err) console.error('关闭数据库失败:', err);
-    else console.log('数据库连接已关闭');
-    process.exit(0);
+function closeDatabase(exitAfterClose = false) {
+  return new Promise((resolve, reject) => {
+    db.close((err) => {
+      if (err) {
+        console.error('关闭数据库失败:', err);
+        reject(err);
+      } else {
+        console.log('数据库连接已关闭');
+        resolve();
+      }
+      if (exitAfterClose) {
+        process.exit(err ? 1 : 0);
+      }
+    });
   });
 }
 
