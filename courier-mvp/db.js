@@ -273,7 +273,7 @@ function initDatabase() {
 
         const settlementIndexes = await allAsync("PRAGMA index_list('cod_daily_settlement')");
         const hasOldUniqueIndex = settlementIndexes.some(idx => {
-          return idx.name === 'sqlite_autoindex_cod_daily_settlement_1' || 
+          return idx.name === 'sqlite_autoindex_cod_daily_settlement_1' ||
                  (idx.unique && idx.origin === 'u');
         });
         if (hasOldUniqueIndex) {
