@@ -409,7 +409,56 @@ async function runTests() {
       assert(result.body.data && result.body.data.package_id === pkg.id, '收款记录应关联正确的包裹');
     });
 
-    await runTestScenario('8. 收款后包裹列表 cod_summary 状态正确 (PAID)', async (createPkg, assert) => {
+    await runTestScenario('8. 签收前必须先完成到付收款', async (createPkg, assert) => {
+      const pkg = await createPkg({
+        is_cod: true,
+        cod_amount: 168.00,
+        status: 'DELIVERING',
+        courier_id: testContext.courierId,
+        site_id: testContext.siteId,
+        zone_id: testContext.zoneId,
+      });
+      console.log(`  创建待签收到付包裹 ID: ${pkg.id}, 当前状态: ${pkg.status}`);
+
+      const receiptBeforePayment = await makeRequest('POST', '/api/delivery-receipts', {
+        package_id: pkg.id,
+        courier_id: testContext.courierId,
+        signer_name: 'COD签收测试人',
+        sign_method: 'PERSONAL_SIGN',
+        sign_time: new Date().toISOString(),
+      });
+      assert(receiptBeforePayment.statusCode === 400, `未收款签收状态码应为 400，实际为 ${receiptBeforePayment.statusCode}`);
+      assert(
+        receiptBeforePayment.body.message && receiptBeforePayment.body.message.includes('先完成收款'),
+        `未收款签收错误信息应包含'先完成收款'，实际为: ${receiptBeforePayment.body.message}`
+      );
+
+      const paymentResult = await makeRequest('POST', '/api/cod-payments', {
+        package_id: pkg.id,
+        courier_id: testContext.courierId,
+        payment_method: 'CASH',
+        amount: 168.00,
+        operator_name: '测试员',
+      });
+      assert(paymentResult.statusCode === 201, `完成收款状态码应为 201，实际为 ${paymentResult.statusCode}`);
+
+      const receiptAfterPayment = await makeRequest('POST', '/api/delivery-receipts', {
+        package_id: pkg.id,
+        courier_id: testContext.courierId,
+        signer_name: 'COD签收测试人',
+        sign_method: 'PERSONAL_SIGN',
+        sign_time: new Date().toISOString(),
+      });
+      assert(receiptAfterPayment.statusCode === 201, `收款后签收状态码应为 201，实际为 ${receiptAfterPayment.statusCode}`);
+
+      const deliveredPkg = await makeRequest('GET', `/api/packages/${pkg.id}`);
+      assert(
+        deliveredPkg.body.data && deliveredPkg.body.data.status === 'DELIVERED',
+        `收款后签收应将包裹更新为 DELIVERED，实际为: ${deliveredPkg.body.data?.status}`
+      );
+    });
+
+    await runTestScenario('9. 收款后包裹列表 cod_summary 状态正确 (PAID)', async (createPkg, assert) => {
       const pkg = await createPkg({
         is_cod: true,
         cod_amount: 200.00,
@@ -452,7 +501,7 @@ async function runTests() {
       );
     });
 
-    await runTestScenario('9. WAIVED 后包裹列表 cod_summary 状态正确 (WAIVED)', async (createPkg, assert) => {
+    await runTestScenario('10. WAIVED 后包裹列表 cod_summary 状态正确 (WAIVED)', async (createPkg, assert) => {
       const pkg = await createPkg({
         is_cod: true,
         cod_amount: 88.88,
@@ -484,7 +533,7 @@ async function runTests() {
       );
     });
 
-    await runTestScenario('10. 工作台待收款列表验证', async (createPkg, assert) => {
+    await runTestScenario('11. 工作台待收款列表验证', async (createPkg, assert) => {
       const pkg = await createPkg({
         is_cod: true,
         cod_amount: 150.00,
@@ -512,7 +561,7 @@ async function runTests() {
       assert(isInPendingAfter === false, '收款后包裹应从待收款列表移除');
     });
 
-    await runTestScenario('11. 日结汇总数据验证', async (createPkg, assert) => {
+    await runTestScenario('12. 日结汇总数据验证', async (createPkg, assert) => {
       const pkgCash = await createPkg({
         is_cod: true,
         cod_amount: 300.00,
@@ -558,7 +607,7 @@ async function runTests() {
       assert(scanAfter >= scanBefore + 100, `扫码金额应增加至少 100，之前: ${scanBefore}, 之后: ${scanAfter}`);
     });
 
-    await runTestScenario('12. 非负责小哥不能收款', async (createPkg, assert) => {
+    await runTestScenario('13. 非负责小哥不能收款', async (createPkg, assert) => {
       const pkg = await createPkg({
         is_cod: true,
         cod_amount: 200.00,
