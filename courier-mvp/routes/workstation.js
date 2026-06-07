@@ -12,7 +12,8 @@ const router = Router();
 router.get('/:courierId/dashboard', async (req, res) => {
   try {
     const { courierId } = req.params;
-    const dashboard = await getCourierDashboard(courierId);
+    const { appointment_filter } = req.query;
+    const dashboard = await getCourierDashboard(courierId, appointment_filter);
     res.json(success(dashboard, '工作台数据查询成功'));
   } catch (err) {
     if (err.statusCode) {
@@ -40,7 +41,8 @@ router.get('/:courierId/stats', async (req, res) => {
 router.get('/:courierId/pending-packages', async (req, res) => {
   try {
     const { courierId } = req.params;
-    const packages = await getCourierPendingPackages(courierId);
+    const { appointment_filter } = req.query;
+    const packages = await getCourierPendingPackages(courierId, appointment_filter);
     res.json(success(packages, '待处理包裹列表查询成功'));
   } catch (err) {
     if (err.statusCode) {

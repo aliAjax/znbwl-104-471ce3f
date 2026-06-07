@@ -1,6 +1,7 @@
 const { allAsync, getAsync, runAsync } = require('../db');
 const { isCourierInZone } = require('./zone');
 const { OPERATOR_TYPES, updatePackageStatusWithTrack } = require('./package_track');
+const { getPackagesWithAppointmentFilter } = require('./delivery_appointment');
 
 const COURIER_STATUSES = {
   ON_DUTY: 'ON_DUTY',
@@ -17,6 +18,8 @@ const STATUS_CATEGORIES = {
 };
 
 const UNFINISHED_PACKAGE_STATUSES = ['ASSIGNED', 'PICKED_UP', 'DELIVERING'];
+
+const APPOINTMENT_FILTER_TYPES = ['today', 'overdue', 'upcoming', 'no_appointment'];
 
 async function getCourierDailyStats(courierId) {
   const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
@@ -41,7 +44,7 @@ async function getCourierDailyStats(courierId) {
   return stats;
 }
 
-async function getCourierPendingPackages(courierId) {
+async function getCourierPendingPackages(courierId, appointmentFilter = null) {
   const courier = await getAsync('SELECT * FROM courier WHERE id = ?', [courierId]);
   if (!courier) {
     const err = new Error('快递小哥不存在');
@@ -49,13 +52,26 @@ async function getCourierPendingPackages(courierId) {
     throw err;
   }
 
+  if (appointmentFilter) {
+    if (!APPOINTMENT_FILTER_TYPES.includes(appointmentFilter)) {
+      const err = new Error(`无效的预约筛选类型，可选值: ${APPOINTMENT_FILTER_TYPES.join(', ')}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return getPackagesWithAppointmentFilter(courierId, appointmentFilter);
+  }
+
   const packages = await allAsync(
-    `SELECT p.*, c.name as courier_name, c.phone as courier_phone
+    `SELECT p.*, c.name as courier_name, c.phone as courier_phone,
+            da.appointment_start, da.appointment_end, da.delivery_preference, da.remark as appointment_remark, da.status as appointment_status
      FROM package p
      LEFT JOIN courier c ON p.courier_id = c.id
+     LEFT JOIN delivery_appointment da ON p.id = da.package_id AND da.status = 'ACTIVE'
      WHERE p.courier_id = ? AND p.status IN ('ASSIGNED', 'PICKED_UP', 'DELIVERING')
      AND date(p.updated_at) = date('now', 'localtime')
      ORDER BY
+       CASE WHEN da.appointment_start IS NOT NULL THEN 0 ELSE 1 END,
+       da.appointment_start ASC,
        CASE p.status
          WHEN 'DELIVERING' THEN 1
          WHEN 'PICKED_UP' THEN 2
@@ -68,10 +84,10 @@ async function getCourierPendingPackages(courierId) {
   return packages;
 }
 
-async function getCourierDashboard(courierId) {
+async function getCourierDashboard(courierId, appointmentFilter = null) {
   const [stats, pendingPackages] = await Promise.all([
     getCourierDailyStats(courierId),
-    getCourierPendingPackages(courierId),
+    getCourierPendingPackages(courierId, appointmentFilter),
   ]);
 
   return {
@@ -201,6 +217,7 @@ async function updateCourierStatus(courierId, status) {
 module.exports = {
   COURIER_STATUSES,
   VALID_COURIER_STATUSES,
+  APPOINTMENT_FILTER_TYPES,
   isCourierOnDuty,
   getCourierDailyStats,
   getCourierPendingPackages,

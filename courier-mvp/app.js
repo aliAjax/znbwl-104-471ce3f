@@ -7,6 +7,7 @@ const exceptionRoutes = require('./routes/exception');
 const deliveryReceiptRoutes = require('./routes/delivery_receipt');
 const workstationRoutes = require('./routes/workstation');
 const zoneRoutes = require('./routes/zone');
+const deliveryAppointmentRoutes = require('./routes/delivery_appointment');
 
 const app = express();
 const PORT = 3000;
@@ -20,6 +21,7 @@ app.use('/api/exceptions', exceptionRoutes);
 app.use('/api/delivery-receipts', deliveryReceiptRoutes);
 app.use('/api/workstation', workstationRoutes);
 app.use('/api', zoneRoutes);
+app.use('/api/delivery-appointments', deliveryAppointmentRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -63,6 +65,14 @@ app.get('/', (req, res) => {
       'DELETE /api/courier-zones': '移除快递小哥的负责区域 (body: {courier_id, zone_id})',
       'GET    /api/couriers/:id/zones': '查询快递小哥负责的所有区域',
       'GET    /api/zones/:id/couriers': '查询负责该区域的所有快递小哥',
+      'POST   /api/delivery-appointments': '创建派送预约 (body: {package_id, appointment_start, appointment_end, delivery_preference?, remark?, operator_type, operator_id?, operator_name?, change_reason?})',
+      'PUT    /api/delivery-appointments/:packageId': '修改派送预约 (body: {appointment_start?, appointment_end?, delivery_preference?, remark?, operator_type, operator_id?, operator_name?, change_reason?})',
+      'PUT    /api/delivery-appointments/:packageId/cancel': '取消派送预约 (body: {operator_type, operator_id?, operator_name?, change_reason?})',
+      'GET    /api/delivery-appointments/package/:packageId': '查询包裹的当前预约信息',
+      'GET    /api/delivery-appointments/package/:packageId/change-logs': '查询包裹的预约变更历史记录',
+      'GET    /api/delivery-appointments/meta': '查询预约相关的枚举元数据',
+      'GET    /api/workstation/:courierId/dashboard?appointment_filter=today|overdue|upcoming|no_appointment': '快递小哥工作台总览，支持按预约状态筛选',
+      'GET    /api/workstation/:courierId/pending-packages?appointment_filter=today|overdue|upcoming|no_appointment': '快递小哥待处理包裹列表，支持按预约状态筛选，有预约的优先按预约时间排序',
     },
     packageStatusFlow: 'CREATED → ASSIGNED → PICKED_UP → DELIVERING → DELIVERED/FAILED',
     packageStatuses: ['CREATED', 'ASSIGNED', 'PICKED_UP', 'DELIVERING', 'DELIVERED', 'FAILED'],
@@ -71,6 +81,11 @@ app.get('/', (req, res) => {
     exceptionStatusFlow: 'PENDING → PROCESSING → RESOLVED / CLOSED',
     exceptionStatuses: ['PENDING', 'PROCESSING', 'RESOLVED', 'CLOSED'],
     signMethods: ['PERSONAL_SIGN', 'AGENT_SIGN', 'CODE_SIGN', 'SMART_CABINET'],
+    appointmentStatuses: ['ACTIVE', 'CANCELLED', 'COMPLETED'],
+    appointmentOperatorTypes: ['RECEIVER', 'COURIER', 'ADMIN', 'SYSTEM'],
+    appointmentChangeTypes: ['CREATE', 'UPDATE', 'CANCEL'],
+    deliveryPreferences: ['PERSONAL_SIGN', 'AGENT_SIGN', 'SMART_CABINET', 'DOORSTEP', 'OTHER'],
+    appointmentFilterTypes: ['today', 'overdue', 'upcoming', 'no_appointment'],
   });
 });
 

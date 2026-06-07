@@ -196,6 +196,38 @@ function initDatabase() {
           FOREIGN KEY (package_id) REFERENCES package(id)
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS delivery_appointment (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          package_id INTEGER NOT NULL UNIQUE,
+          appointment_start TEXT NOT NULL,
+          appointment_end TEXT NOT NULL,
+          delivery_preference TEXT,
+          remark TEXT,
+          status TEXT NOT NULL DEFAULT 'ACTIVE',
+          creator_type TEXT NOT NULL,
+          creator_id INTEGER,
+          creator_name TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (package_id) REFERENCES package(id)
+        );`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS delivery_appointment_change_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          appointment_id INTEGER NOT NULL,
+          package_id INTEGER NOT NULL,
+          old_values TEXT,
+          new_values TEXT NOT NULL,
+          change_type TEXT NOT NULL,
+          operator_type TEXT NOT NULL,
+          operator_id INTEGER,
+          operator_name TEXT,
+          change_reason TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (appointment_id) REFERENCES delivery_appointment(id),
+          FOREIGN KEY (package_id) REFERENCES package(id)
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');
