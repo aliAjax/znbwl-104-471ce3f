@@ -18,21 +18,34 @@ async function getCourierWorkload(courierId) {
   };
 }
 
-async function getAvailableCouriersByZone(zoneId) {
+async function getAvailableCouriersBySiteAndZone(siteId, zoneId) {
   let couriers;
+
   if (zoneId) {
     couriers = await allAsync(
-      `SELECT c.* FROM courier_zone cz
+      `SELECT DISTINCT c.* FROM courier_zone cz
        LEFT JOIN courier c ON cz.courier_id = c.id
-       WHERE cz.zone_id = ? AND c.status = 'ON_DUTY'`,
+       LEFT JOIN delivery_zone dz ON cz.zone_id = dz.id
+       WHERE dz.id = ? AND c.status = 'ON_DUTY'`,
       [zoneId]
+    );
+  } else if (siteId) {
+    couriers = await allAsync(
+      `SELECT DISTINCT c.* FROM courier_zone cz
+       LEFT JOIN courier c ON cz.courier_id = c.id
+       LEFT JOIN delivery_zone dz ON cz.zone_id = dz.id
+       WHERE dz.site_id = ? AND c.status = 'ON_DUTY'`,
+      [siteId]
     );
   } else {
     couriers = await allAsync("SELECT * FROM courier WHERE status = 'ON_DUTY'");
   }
 
+  const courierIds = couriers.map(c => c.id);
+  const uniqueCouriers = couriers.filter((c, index) => courierIds.indexOf(c.id) === index);
+
   const couriersWithWorkload = [];
-  for (const courier of couriers) {
+  for (const courier of uniqueCouriers) {
     const workload = await getCourierWorkload(courier.id);
     couriersWithWorkload.push({
       ...courier,
@@ -43,6 +56,48 @@ async function getAvailableCouriersByZone(zoneId) {
   return couriersWithWorkload.sort((a, b) => a.unfinished_count - b.unfinished_count);
 }
 
+async function validatePackageForDispatch(packageId) {
+  const errors = [];
+
+  if (packageId === null || packageId === undefined) {
+    return { valid: false, pkg: null, errors: ['包裹ID不能为空'] };
+  }
+
+  if (!Number.isInteger(packageId) || packageId <= 0) {
+    return { valid: false, pkg: null, errors: ['包裹ID格式无效'] };
+  }
+
+  const pkg = await getAsync(
+    'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p ' +
+    'LEFT JOIN site s ON p.site_id = s.id ' +
+    'LEFT JOIN delivery_zone dz ON p.zone_id = dz.id ' +
+    'WHERE p.id = ?',
+    [packageId]
+  );
+
+  if (!pkg) {
+    return { valid: false, pkg: null, errors: ['包裹不存在'] };
+  }
+
+  if (pkg.status !== 'CREATED') {
+    return { valid: false, pkg, errors: [`包裹状态为 ${pkg.status}，仅 CREATED 状态可分派`], skipType: 'SKIPPED' };
+  }
+
+  if (pkg.courier_id) {
+    return { valid: false, pkg, errors: ['包裹已分配给其他快递小哥'], skipType: 'SKIPPED' };
+  }
+
+  if (pkg.zone_id) {
+    try {
+      await getZoneById(pkg.zone_id);
+    } catch (e) {
+      errors.push('包裹关联的配送区域不存在');
+    }
+  }
+
+  return { valid: true, pkg, errors };
+}
+
 async function findBestCourierForPackage(pkg) {
   const reasons = [];
 
@@ -50,28 +105,13 @@ async function findBestCourierForPackage(pkg) {
     return { courier: null, reasons: ['包裹不存在'] };
   }
 
-  if (pkg.status !== 'CREATED') {
-    return { courier: null, reasons: [`包裹状态为 ${pkg.status}，仅 CREATED 状态可分派`] };
-  }
-
-  if (pkg.courier_id) {
-    return { courier: null, reasons: ['包裹已分配给其他快递小哥'] };
-  }
-
-  let zoneInfo = null;
-  if (pkg.zone_id) {
-    try {
-      zoneInfo = await getZoneById(pkg.zone_id);
-    } catch (e) {
-      reasons.push('包裹关联的配送区域不存在');
-    }
-  }
-
-  const availableCouriers = await getAvailableCouriersByZone(pkg.zone_id || null);
+  const availableCouriers = await getAvailableCouriersBySiteAndZone(pkg.site_id, pkg.zone_id);
 
   if (availableCouriers.length === 0) {
     if (pkg.zone_id) {
       reasons.push('该配送区域暂无在岗快递小哥');
+    } else if (pkg.site_id) {
+      reasons.push('该站点下所有配送区域暂无在岗快递小哥');
     } else {
       reasons.push('系统暂无在岗快递小哥');
     }
@@ -79,96 +119,120 @@ async function findBestCourierForPackage(pkg) {
   }
 
   if (!pkg.zone_id && !pkg.site_id) {
-    reasons.push('包裹无站点和配送区域信息，按全局在岗小哥中选择负载最低的');
+    reasons.push('包裹无站点和配送区域信息，从全局在岗小哥中选择负载最低的');
   } else if (!pkg.zone_id && pkg.site_id) {
-    reasons.push('包裹无配送区域信息，按站点匹配后选择负载最低的在岗小哥');
+    reasons.push(`包裹无配送区域信息，从站点【${pkg.site_name || pkg.site_id}】下所有区域的在岗小哥中选择负载最低的`);
   }
 
   return {
     courier: availableCouriers[0],
     reasons,
+    candidate_count: availableCouriers.length,
   };
+}
+
+function buildDispatchResult(packageId, type, success, reason, options = {}) {
+  const result = {
+    package_id: packageId,
+    type,
+    success,
+    reason,
+    recommended_courier: null,
+  };
+
+  if (options.package_info) {
+    result.package_info = options.package_info;
+  }
+  if (options.recommended_courier) {
+    result.recommended_courier = options.recommended_courier;
+  }
+  if (options.candidate_count !== undefined) {
+    result.candidate_count = options.candidate_count;
+  }
+
+  return result;
 }
 
 async function previewDispatch(packageIds) {
   const results = [];
-  const seenIds = [...new Set(packageIds)];
+
+  if (!packageIds) {
+    return {
+      summary: { total: 0, success: 0, skipped: 0, failed: 0, data_error: 0 },
+      details: [],
+    };
+  }
+
+  let normalizedIds = packageIds;
+  if (!Array.isArray(normalizedIds)) {
+    normalizedIds = [normalizedIds];
+  }
+
+  const seenIds = [...new Set(normalizedIds.filter(id => id !== null && id !== undefined))];
 
   for (const packageId of seenIds) {
     try {
-      if (!Number.isInteger(packageId) || packageId <= 0) {
-        results.push({
-          package_id: packageId,
-          type: DISPATCH_RESULT_TYPES.DATA_ERROR,
-          success: false,
-          reason: '包裹ID格式无效',
-          recommended_courier: null,
-        });
+      const validation = await validatePackageForDispatch(packageId);
+
+      if (!validation.valid) {
+        if (validation.skipType === 'SKIPPED') {
+          results.push(buildDispatchResult(
+            packageId,
+            DISPATCH_RESULT_TYPES.SKIPPED,
+            false,
+            validation.errors.join('; '),
+            validation.pkg ? {
+              package_info: {
+                tracking_no: validation.pkg.tracking_no,
+                status: validation.pkg.status,
+                courier_id: validation.pkg.courier_id,
+                site_name: validation.pkg.site_name,
+                zone_name: validation.pkg.zone_name,
+                has_site_id: !!validation.pkg.site_id,
+                has_zone_id: !!validation.pkg.zone_id,
+              },
+            } : {}
+          ));
+        } else {
+          results.push(buildDispatchResult(
+            packageId,
+            DISPATCH_RESULT_TYPES.DATA_ERROR,
+            false,
+            validation.errors.join('; ')
+          ));
+        }
         continue;
       }
 
-      const pkg = await getAsync(
-        'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p ' +
-        'LEFT JOIN site s ON p.site_id = s.id ' +
-        'LEFT JOIN delivery_zone dz ON p.zone_id = dz.id ' +
-        'WHERE p.id = ?',
-        [packageId]
-      );
-
-      if (!pkg) {
-        results.push({
-          package_id: packageId,
-          type: DISPATCH_RESULT_TYPES.DATA_ERROR,
-          success: false,
-          reason: '包裹不存在',
-          recommended_courier: null,
-        });
-        continue;
-      }
-
-      if (pkg.status !== 'CREATED') {
-        results.push({
-          package_id: packageId,
-          type: DISPATCH_RESULT_TYPES.SKIPPED,
-          success: false,
-          reason: `包裹状态为 ${pkg.status}，仅 CREATED 状态可分派`,
-          package_info: {
-            tracking_no: pkg.tracking_no,
-            status: pkg.status,
-            site_name: pkg.site_name,
-            zone_name: pkg.zone_name,
-          },
-          recommended_courier: null,
-        });
-        continue;
-      }
-
-      if (pkg.courier_id) {
-        results.push({
-          package_id: packageId,
-          type: DISPATCH_RESULT_TYPES.SKIPPED,
-          success: false,
-          reason: '包裹已分配给其他快递小哥',
-          package_info: {
-            tracking_no: pkg.tracking_no,
-            status: pkg.status,
-            courier_id: pkg.courier_id,
-            site_name: pkg.site_name,
-            zone_name: pkg.zone_name,
-          },
-          recommended_courier: null,
-        });
-        continue;
-      }
-
-      const { courier, reasons } = await findBestCourierForPackage(pkg);
+      const pkg = validation.pkg;
+      const { courier, reasons, candidate_count } = await findBestCourierForPackage(pkg);
 
       if (!courier) {
-        results.push({
-          package_id: packageId,
-          type: DISPATCH_RESULT_TYPES.FAILED,
-          success: false,
-          reason: reasons.join('; '),
+        results.push(buildDispatchResult(
+          packageId,
+          DISPATCH_RESULT_TYPES.FAILED,
+          false,
+          reasons.join('; '),
+          {
+            package_info: {
+              tracking_no: pkg.tracking_no,
+              status: pkg.status,
+              site_name: pkg.site_name,
+              zone_name: pkg.zone_name,
+              has_site_id: !!pkg.site_id,
+              has_zone_id: !!pkg.zone_id,
+            },
+          }
+        ));
+        continue;
+      }
+
+      results.push(buildDispatchResult(
+        packageId,
+        DISPATCH_RESULT_TYPES.SUCCESS,
+        true,
+        reasons.length > 0 ? reasons.join('; ') : '匹配成功',
+        {
           package_info: {
             tracking_no: pkg.tracking_no,
             status: pkg.status,
@@ -177,40 +241,23 @@ async function previewDispatch(packageIds) {
             has_site_id: !!pkg.site_id,
             has_zone_id: !!pkg.zone_id,
           },
-          recommended_courier: null,
-        });
-        continue;
-      }
-
-      results.push({
-        package_id: packageId,
-        type: DISPATCH_RESULT_TYPES.SUCCESS,
-        success: true,
-        reason: reasons.length > 0 ? reasons.join('; ') : '匹配成功',
-        package_info: {
-          tracking_no: pkg.tracking_no,
-          status: pkg.status,
-          site_name: pkg.site_name,
-          zone_name: pkg.zone_name,
-          has_site_id: !!pkg.site_id,
-          has_zone_id: !!pkg.zone_id,
-        },
-        recommended_courier: {
-          id: courier.id,
-          name: courier.name,
-          phone: courier.phone,
-          status: courier.status,
-          unfinished_count: courier.unfinished_count,
-        },
-      });
+          recommended_courier: {
+            id: courier.id,
+            name: courier.name,
+            phone: courier.phone,
+            status: courier.status,
+            unfinished_count: courier.unfinished_count,
+          },
+          candidate_count,
+        }
+      ));
     } catch (err) {
-      results.push({
-        package_id: packageId,
-        type: DISPATCH_RESULT_TYPES.DATA_ERROR,
-        success: false,
-        reason: `数据处理异常: ${err.message}`,
-        recommended_courier: null,
-      });
+      results.push(buildDispatchResult(
+        packageId,
+        DISPATCH_RESULT_TYPES.DATA_ERROR,
+        false,
+        `数据处理异常: ${err.message}`
+      ));
     }
   }
 
@@ -229,13 +276,54 @@ async function previewDispatch(packageIds) {
 }
 
 async function confirmDispatch(packageIds, operatorName = '系统运营') {
-  const previewResult = await previewDispatch(packageIds);
+  if (!packageIds) {
+    return {
+      summary: { total: 0, success: 0, skipped: 0, failed: 0, data_error: 0 },
+      details: [],
+    };
+  }
+
+  let normalizedIds = packageIds;
+  if (!Array.isArray(normalizedIds)) {
+    normalizedIds = [normalizedIds];
+  }
+
+  const previewResult = await previewDispatch(normalizedIds);
   const successItems = previewResult.details.filter(r => r.type === DISPATCH_RESULT_TYPES.SUCCESS);
 
   const confirmResults = [];
 
   for (const item of successItems) {
     try {
+      const reValidation = await validatePackageForDispatch(item.package_id);
+      if (!reValidation.valid) {
+        if (reValidation.skipType === 'SKIPPED') {
+          confirmResults.push(buildDispatchResult(
+            item.package_id,
+            DISPATCH_RESULT_TYPES.SKIPPED,
+            false,
+            `确认时状态已变更: ${reValidation.errors.join('; ')}`,
+            reValidation.pkg ? {
+              package_info: {
+                tracking_no: reValidation.pkg.tracking_no,
+                status: reValidation.pkg.status,
+                courier_id: reValidation.pkg.courier_id,
+                site_name: reValidation.pkg.site_name,
+                zone_name: reValidation.pkg.zone_name,
+              },
+            } : {}
+          ));
+        } else {
+          confirmResults.push(buildDispatchResult(
+            item.package_id,
+            DISPATCH_RESULT_TYPES.DATA_ERROR,
+            false,
+            `确认时数据异常: ${reValidation.errors.join('; ')}`
+          ));
+        }
+        continue;
+      }
+
       await runInTransaction(async () => {
         const result = await _updatePackageStatusWithTrackInternal(
           item.package_id,
@@ -255,13 +343,13 @@ async function confirmDispatch(packageIds, operatorName = '系统运营') {
         });
       });
     } catch (err) {
-      confirmResults.push({
-        ...item,
-        type: DISPATCH_RESULT_TYPES.DATA_ERROR,
-        success: false,
-        confirmed: false,
-        reason: `确认分派失败: ${err.message}`,
-      });
+      confirmResults.push(buildDispatchResult(
+        item.package_id,
+        DISPATCH_RESULT_TYPES.DATA_ERROR,
+        false,
+        `确认分派失败: ${err.message}`,
+        { recommended_courier: item.recommended_courier }
+      ));
     }
   }
 
@@ -287,5 +375,6 @@ module.exports = {
   previewDispatch,
   confirmDispatch,
   findBestCourierForPackage,
-  getAvailableCouriersByZone,
+  getAvailableCouriersBySiteAndZone,
+  validatePackageForDispatch,
 };

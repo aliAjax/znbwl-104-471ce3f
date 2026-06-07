@@ -26,15 +26,38 @@ function validateBatchAssign(body) {
 }
 
 function validateDispatch(body) {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, message: '请求体不能为空且必须为JSON对象' };
+  }
+
   const { package_ids, operator_name } = body;
 
-  if (!Array.isArray(package_ids) || package_ids.length === 0) {
-    return { valid: false, message: '请提供包裹ID列表（非空数组）' };
+  if (package_ids === null || package_ids === undefined) {
+    return { valid: false, message: '请提供 package_ids 参数' };
   }
+
+  if (!Array.isArray(package_ids)) {
+    return { valid: false, message: 'package_ids 必须为数组类型' };
+  }
+
+  if (package_ids.length === 0) {
+    return { valid: false, message: '包裹ID列表不能为空' };
+  }
+
   if (package_ids.length > DISPATCH_MAX_COUNT) {
     return { valid: false, message: `单次智能分派不超过${DISPATCH_MAX_COUNT}个包裹` };
   }
-  const uniqueIds = [...new Set(package_ids)];
+
+  const validIds = package_ids.filter(id => id !== null && id !== undefined);
+  const uniqueIds = [...new Set(validIds)];
+
+  if (operator_name !== undefined && typeof operator_name !== 'string') {
+    return { valid: false, message: 'operator_name 必须为字符串类型' };
+  }
+
+  if (operator_name && operator_name.length > 100) {
+    return { valid: false, message: 'operator_name 长度不能超过100个字符' };
+  }
 
   return {
     valid: true,
