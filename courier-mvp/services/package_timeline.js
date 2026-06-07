@@ -180,7 +180,7 @@ async function getPackageTimeline(packageId) {
       raw_data_type: 'package',
       details: {
         old_status: null,
-        new_status: pkg.status,
+        new_status: 'CREATED',
       },
     });
 
@@ -188,30 +188,54 @@ async function getPackageTimeline(packageId) {
       { from: 'CREATED', to: 'ASSIGNED', label: '分配快递员' },
       { from: 'ASSIGNED', to: 'PICKED_UP', label: '已揽收' },
       { from: 'PICKED_UP', to: 'DELIVERING', label: '开始派送' },
-      { from: 'DELIVERING', to: 'DELIVERED', label: '已签收' },
-      { from: 'DELIVERING', to: 'FAILED', label: '派送失败' },
     ];
 
-    for (let i = 0; i < statusTransitions.length - 1; i++) {
-      const transition = statusTransitions[i];
-      if (pkg.status === transition.to || i > statusTransitions.findIndex(t => t.to === pkg.status)) {
-        events.push({
-          event_id: `legacy_status_${packageId}_${transition.to}`,
-          event_type: EVENT_TYPES.STATUS_CHANGED,
-          occurred_at: pkg.updated_at,
-          operator: formatOperator('SYSTEM', null, null),
-          operator_type: 'SYSTEM',
-          operator_id: null,
-          summary: `${transition.label}（历史数据）`,
-          raw_data_id: packageId,
-          raw_data_type: 'package',
-          details: {
-            old_status: transition.from,
-            new_status: transition.to,
-          },
-        });
+    const finalTransitions = {
+      DELIVERED: { from: 'DELIVERING', to: 'DELIVERED', label: '已签收' },
+      FAILED: { from: 'DELIVERING', to: 'FAILED', label: '派送失败' },
+    };
+
+    for (const transition of statusTransitions) {
+      if (transition.from === pkg.status) {
         break;
       }
+      events.push({
+        event_id: `legacy_status_${packageId}_${transition.to}`,
+        event_type: EVENT_TYPES.STATUS_CHANGED,
+        occurred_at: pkg.updated_at,
+        operator: formatOperator('SYSTEM', null, null),
+        operator_type: 'SYSTEM',
+        operator_id: null,
+        summary: `${transition.label}（历史数据）`,
+        raw_data_id: packageId,
+        raw_data_type: 'package',
+        details: {
+          old_status: transition.from,
+          new_status: transition.to,
+        },
+      });
+      if (transition.to === pkg.status) {
+        break;
+      }
+    }
+
+    if (finalTransitions[pkg.status]) {
+      const finalTransition = finalTransitions[pkg.status];
+      events.push({
+        event_id: `legacy_status_${packageId}_${finalTransition.to}`,
+        event_type: EVENT_TYPES.STATUS_CHANGED,
+        occurred_at: pkg.updated_at,
+        operator: formatOperator('SYSTEM', null, null),
+        operator_type: 'SYSTEM',
+        operator_id: null,
+        summary: `${finalTransition.label}（历史数据）`,
+        raw_data_id: packageId,
+        raw_data_type: 'package',
+        details: {
+          old_status: finalTransition.from,
+          new_status: finalTransition.to,
+        },
+      });
     }
   }
 
@@ -333,16 +357,17 @@ async function getPackageTimeline(packageId) {
       return timeA - timeB;
     }
     
+    const idA = parseInt(a.raw_data_id) || 0;
+    const idB = parseInt(b.raw_data_id) || 0;
+    
+    if (idA !== idB) {
+      return idA - idB;
+    }
+    
     const orderA = EVENT_TYPE_ORDER[a.event_type] ?? 99;
     const orderB = EVENT_TYPE_ORDER[b.event_type] ?? 99;
     
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    
-    const idA = parseInt(a.raw_data_id) || 0;
-    const idB = parseInt(b.raw_data_id) || 0;
-    return idA - idB;
+    return orderA - orderB;
   });
 
   return events;
