@@ -1,4 +1,5 @@
-const { runAsync, allAsync, getAsync } = require('../db');
+const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
+const { OPERATOR_TYPES, addPackageTrack } = require('./package_track');
 
 const VALID_SIGN_METHODS = [
   'PERSONAL_SIGN',
@@ -47,18 +48,32 @@ async function createDeliveryReceipt({ package_id, courier_id, signer_name, sign
     throw err;
   }
 
-  const result = await runAsync(
-    `INSERT INTO delivery_receipt (package_id, courier_id, signer_name, sign_method, sign_time)
-     VALUES (?, ?, ?, ?, ?)`,
-    [package_id, courier_id, signer_name, sign_method, sign_time]
-  );
+  const receiptId = await runInTransaction(async () => {
+    const result = await runAsync(
+      `INSERT INTO delivery_receipt (package_id, courier_id, signer_name, sign_method, sign_time)
+       VALUES (?, ?, ?, ?, ?)`,
+      [package_id, courier_id, signer_name, sign_method, sign_time]
+    );
 
-  await runAsync(
-    `UPDATE package SET status = 'DELIVERED', updated_at = datetime('now','localtime') WHERE id = ?`,
-    [package_id]
-  );
+    await runAsync(
+      `UPDATE package SET status = 'DELIVERED', updated_at = datetime('now','localtime') WHERE id = ?`,
+      [package_id]
+    );
 
-  const receipt = await getAsync('SELECT * FROM delivery_receipt WHERE id = ?', [result.lastID]);
+    await addPackageTrack({
+      packageId: package_id,
+      oldStatus: 'DELIVERING',
+      newStatus: 'DELIVERED',
+      operatorType: OPERATOR_TYPES.COURIER,
+      operatorId: courier_id,
+      operatorName: courier.name,
+      remark: `包裹签收: ${sign_method}, 签收人: ${signer_name}`,
+    });
+
+    return result.lastID;
+  });
+
+  const receipt = await getAsync('SELECT * FROM delivery_receipt WHERE id = ?', [receiptId]);
   return receipt;
 }
 

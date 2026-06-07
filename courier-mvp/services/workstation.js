@@ -1,5 +1,6 @@
-const { allAsync, getAsync, runAsync } = require('../db');
+const { allAsync, getAsync } = require('../db');
 const { isCourierInZone } = require('./zone');
+const { OPERATOR_TYPES, updatePackageStatusWithTrack } = require('./package_track');
 
 const COURIER_STATUSES = {
   ON_DUTY: 'ON_DUTY',
@@ -116,15 +117,18 @@ async function batchAssignPackages(packageIds, courierId) {
           continue;
         }
       }
-      await runAsync(
-        `UPDATE package SET courier_id = ?, status = 'ASSIGNED', updated_at = datetime('now','localtime') WHERE id = ?`,
-        [courierId, packageId]
+      const updateResult = await updatePackageStatusWithTrack(
+        packageId,
+        'ASSIGNED',
+        {
+          operatorType: OPERATOR_TYPES.ADMIN,
+          operatorId: null,
+          operatorName: courier.name,
+          remark: `批量分配给快递小哥: ${courier.name}`,
+        },
+        { courier_id: courierId }
       );
-      const updated = await getAsync(
-        'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
-        [packageId]
-      );
-      results.push({ package_id: packageId, success: true, data: updated });
+      results.push({ package_id: packageId, success: true, data: updateResult.package });
     } catch (err) {
       results.push({ package_id: packageId, success: false, reason: `分配失败: ${err.message}` });
     }

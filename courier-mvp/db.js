@@ -25,6 +25,45 @@ function runAsync(sql, params = []) {
   });
 }
 
+function beginTransaction() {
+  return new Promise((resolve, reject) => {
+    db.run('BEGIN TRANSACTION', (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function commitTransaction() {
+  return new Promise((resolve, reject) => {
+    db.run('COMMIT', (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function rollbackTransaction() {
+  return new Promise((resolve, reject) => {
+    db.run('ROLLBACK', (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+async function runInTransaction(callback) {
+  try {
+    await beginTransaction();
+    const result = await callback();
+    await commitTransaction();
+    return result;
+  } catch (err) {
+    await rollbackTransaction();
+    throw err;
+  }
+}
+
 function allAsync(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.all(sql, params, (err, rows) => {
@@ -144,6 +183,19 @@ function initDatabase() {
           UNIQUE(courier_id, zone_id)
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS package_track (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          package_id INTEGER NOT NULL,
+          old_status TEXT,
+          new_status TEXT NOT NULL,
+          operator_type TEXT NOT NULL,
+          operator_id INTEGER,
+          operator_name TEXT,
+          remark TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (package_id) REFERENCES package(id)
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');
@@ -198,6 +250,10 @@ module.exports = {
   runAsync,
   allAsync,
   getAsync,
+  beginTransaction,
+  commitTransaction,
+  rollbackTransaction,
+  runInTransaction,
   initDatabase,
   closeDatabase,
 };

@@ -1,11 +1,12 @@
 const { Router } = require('express');
-const { runAsync, allAsync, getAsync } = require('../db');
+const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
 const { success, fail } = require('../utils/response');
 const { parsePaginationParams, buildPaginationResult } = require('../utils/pagination');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { isCourierInZone } = require('../services/zone');
 const { validateBatchAssign } = require('../utils/validators');
+const { OPERATOR_TYPES, addPackageTrack, getPackageTracks, updatePackageStatusWithTrack } = require('../services/package_track');
 
 const router = Router();
 
@@ -51,14 +52,24 @@ router.post('/', async (req, res) => {
     if (existing) {
       return res.status(400).json(fail('运单号已存在'));
     }
-    const result = await runAsync(
-      `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`,
-      [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, finalSiteId, finalZoneId]
-    );
+    const packageId = await runInTransaction(async () => {
+      const result = await runAsync(
+        `INSERT INTO package (tracking_no, sender_name, sender_phone, receiver_name, receiver_phone, receiver_address, weight, status, site_id, zone_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`,
+        [finalTrackingNo, sender_name || null, sender_phone || null, receiver_name, receiver_phone, receiver_address || null, weight || 0, finalSiteId, finalZoneId]
+      );
+      await addPackageTrack({
+        packageId: result.lastID,
+        oldStatus: null,
+        newStatus: 'CREATED',
+        operatorType: OPERATOR_TYPES.SYSTEM,
+        remark: '包裹创建',
+      });
+      return result.lastID;
+    });
     const pkg = await getAsync(
       'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE p.id = ?',
-      [result.lastID]
+      [packageId]
     );
     res.status(201).json(success(pkg, '包裹创建成功'));
   } catch (err) {
@@ -94,15 +105,18 @@ router.put('/:id/assign', async (req, res) => {
         return res.status(400).json(fail('该快递小哥不负责此包裹的配送区域，无法分配'));
       }
     }
-    await runAsync(
-      `UPDATE package SET courier_id = ?, status = 'ASSIGNED', updated_at = datetime('now','localtime') WHERE id = ?`,
-      [courier_id, id]
+    const result = await updatePackageStatusWithTrack(
+      id,
+      'ASSIGNED',
+      {
+        operatorType: OPERATOR_TYPES.ADMIN,
+        operatorId: null,
+        operatorName: courier.name,
+        remark: `分配给快递小哥: ${courier.name}`,
+      },
+      { courier_id: courier_id }
     );
-    const updated = await getAsync(
-      'SELECT p.*, s.name as site_name, dz.name as zone_name, c.name as courier_name, c.phone as courier_phone FROM package p LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id LEFT JOIN courier c ON p.courier_id = c.id WHERE p.id = ?',
-      [id]
-    );
-    res.json(success(updated, '包裹已分配给快递小哥'));
+    res.json(success(result.package, '包裹已分配给快递小哥'));
   } catch (err) {
     console.error('分配包裹失败:', err);
     res.status(500).json(fail('服务器内部错误'));
@@ -160,12 +174,24 @@ router.put('/:id/status', async (req, res) => {
     if (status === 'DELIVERED') {
       return res.status(400).json(fail('包裹签收请通过 POST /api/delivery-receipts 提交签收凭证，不可直接变更状态'));
     }
-    await runAsync(
-      `UPDATE package SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
-      [status, id]
+
+    let operatorName = null;
+    if (courier_id) {
+      const courier = await getAsync('SELECT name FROM courier WHERE id = ?', [courier_id]);
+      if (courier) operatorName = courier.name;
+    }
+
+    const result = await updatePackageStatusWithTrack(
+      id,
+      status,
+      {
+        operatorType: courier_id ? OPERATOR_TYPES.COURIER : OPERATOR_TYPES.ADMIN,
+        operatorId: courier_id || null,
+        operatorName,
+        remark: `状态更新: ${pkg.status} -> ${status}`,
+      }
     );
-    const updated = await getAsync('SELECT * FROM package WHERE id = ?', [id]);
-    res.json(success(updated, '包裹状态更新成功'));
+    res.json(success(result.package, '包裹状态更新成功'));
   } catch (err) {
     console.error('更新包裹状态失败:', err);
     res.status(500).json(fail('服务器内部错误'));
@@ -241,11 +267,15 @@ router.get('/:id', async (req, res) => {
     if (!pkg) {
       return res.status(404).json(fail('包裹不存在'));
     }
-    const receipt = await getDeliveryReceiptByPackageId(id);
+    const [receipt, tracks] = await Promise.all([
+      getDeliveryReceiptByPackageId(id),
+      getPackageTracks(id),
+    ]);
     const result = { ...pkg };
     if (receipt) {
       result.delivery_receipt = receipt;
     }
+    result.tracks = tracks;
     res.json(success(result));
   } catch (err) {
     console.error('查询包裹详情失败:', err);
