@@ -35,6 +35,12 @@ function validateDateTime(datetimeStr) {
   return !isNaN(dt.getTime());
 }
 
+function normalizeDateTime(datetimeStr) {
+  const dt = new Date(datetimeStr);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+}
+
 async function canModifyAppointment(packageId) {
   const pkg = await getAsync('SELECT status FROM package WHERE id = ?', [packageId]);
   if (!pkg) {
@@ -106,6 +112,9 @@ async function createAppointment({
     throw err;
   }
 
+  const normalizedStart = normalizeDateTime(appointmentStart);
+  const normalizedEnd = normalizeDateTime(appointmentEnd);
+
   const result = await runInTransaction(async () => {
     const insertResult = await runAsync(
       `INSERT INTO delivery_appointment (
@@ -114,8 +123,8 @@ async function createAppointment({
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         packageId,
-        appointmentStart,
-        appointmentEnd,
+        normalizedStart,
+        normalizedEnd,
         deliveryPreference || null,
         remark || null,
         APPOINTMENT_STATUSES.ACTIVE,
@@ -126,8 +135,8 @@ async function createAppointment({
     );
 
     const newValues = JSON.stringify({
-      appointment_start: appointmentStart,
-      appointment_end: appointmentEnd,
+      appointment_start: normalizedStart,
+      appointment_end: normalizedEnd,
       delivery_preference: deliveryPreference || null,
       remark: remark || null,
       status: APPOINTMENT_STATUSES.ACTIVE,
@@ -193,10 +202,21 @@ async function updateAppointment({
     throw err;
   }
 
-  const newAppointmentStart = appointmentStart || appointment.appointment_start;
-  const newAppointmentEnd = appointmentEnd || appointment.appointment_end;
+  if (appointmentStart !== undefined && !validateDateTime(appointmentStart)) {
+    const err = new Error('预约开始时间格式无效');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (appointmentEnd !== undefined && !validateDateTime(appointmentEnd)) {
+    const err = new Error('预约结束时间格式无效');
+    err.statusCode = 400;
+    throw err;
+  }
 
-  if (new Date(newAppointmentStart) >= new Date(newAppointmentEnd)) {
+  const normalizedStart = appointmentStart !== undefined ? normalizeDateTime(appointmentStart) : appointment.appointment_start;
+  const normalizedEnd = appointmentEnd !== undefined ? normalizeDateTime(appointmentEnd) : appointment.appointment_end;
+
+  if (new Date(normalizedStart) >= new Date(normalizedEnd)) {
     const err = new Error('预约开始时间必须早于结束时间');
     err.statusCode = 400;
     throw err;
@@ -214,11 +234,11 @@ async function updateAppointment({
 
   if (appointmentStart !== undefined) {
     updateFields.push('appointment_start = ?');
-    updateParams.push(appointmentStart);
+    updateParams.push(normalizedStart);
   }
   if (appointmentEnd !== undefined) {
     updateFields.push('appointment_end = ?');
-    updateParams.push(appointmentEnd);
+    updateParams.push(normalizedEnd);
   }
   if (deliveryPreference !== undefined) {
     updateFields.push('delivery_preference = ?');
@@ -410,6 +430,7 @@ async function getPackagesWithAppointmentFilter(courierId, filterType) {
     LEFT JOIN courier c ON p.courier_id = c.id
     LEFT JOIN delivery_appointment da ON p.id = da.package_id AND da.status = 'ACTIVE'
     WHERE p.courier_id = ? AND p.status IN ('ASSIGNED', 'PICKED_UP', 'DELIVERING')
+    AND date(p.updated_at) = date('now', 'localtime')
   `;
 
   const params = [courierId];
@@ -417,9 +438,9 @@ async function getPackagesWithAppointmentFilter(courierId, filterType) {
   if (filterType === 'today') {
     baseSql += ` AND date(da.appointment_start) = date('now', 'localtime')`;
   } else if (filterType === 'overdue') {
-    baseSql += ` AND da.appointment_end < datetime('now', 'localtime')`;
+    baseSql += ` AND datetime(da.appointment_end) < datetime('now', 'localtime')`;
   } else if (filterType === 'upcoming') {
-    baseSql += ` AND da.appointment_start > datetime('now', 'localtime')`;
+    baseSql += ` AND datetime(da.appointment_start) > datetime('now', 'localtime')`;
   } else if (filterType === 'no_appointment') {
     baseSql += ` AND da.id IS NULL`;
   }
@@ -427,7 +448,7 @@ async function getPackagesWithAppointmentFilter(courierId, filterType) {
   baseSql += `
     ORDER BY
       CASE WHEN da.appointment_start IS NOT NULL THEN 0 ELSE 1 END,
-      da.appointment_start ASC,
+      datetime(da.appointment_start) ASC,
       CASE p.status
         WHEN 'DELIVERING' THEN 1
         WHEN 'PICKED_UP' THEN 2

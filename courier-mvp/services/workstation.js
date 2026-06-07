@@ -71,7 +71,7 @@ async function getCourierPendingPackages(courierId, appointmentFilter = null) {
      AND date(p.updated_at) = date('now', 'localtime')
      ORDER BY
        CASE WHEN da.appointment_start IS NOT NULL THEN 0 ELSE 1 END,
-       da.appointment_start ASC,
+       datetime(da.appointment_start) ASC,
        CASE p.status
          WHEN 'DELIVERING' THEN 1
          WHEN 'PICKED_UP' THEN 2
