@@ -322,6 +322,16 @@ function initDatabase() {
           created_at TEXT DEFAULT (datetime('now','localtime'))
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS dispatch_plan (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          operator_name TEXT,
+          plan_data TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          confirmed_at TEXT
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');

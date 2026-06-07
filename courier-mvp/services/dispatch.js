@@ -1,4 +1,4 @@
-const { allAsync, getAsync, runInTransaction } = require('../db');
+const { allAsync, getAsync, runAsync, runInTransaction } = require('../db');
 const { isCourierOnDuty, getCourierUnfinishedPackageCount } = require('./workstation');
 const { isCourierInZone, getZoneById } = require('./zone');
 const { OPERATOR_TYPES, _updatePackageStatusWithTrackInternal } = require('./package_track');
@@ -8,7 +8,16 @@ const DISPATCH_RESULT_TYPES = {
   SKIPPED: 'SKIPPED',
   FAILED: 'FAILED',
   DATA_ERROR: 'DATA_ERROR',
+  INVALID: 'INVALID',
 };
+
+const DISPATCH_PLAN_STATUSES = {
+  PENDING: 'PENDING',
+  CONFIRMED: 'CONFIRMED',
+  EXPIRED: 'EXPIRED',
+};
+
+const PLAN_EXPIRE_MINUTES = 30;
 
 async function getCourierWorkload(courierId) {
   const unfinished = await getCourierUnfinishedPackageCount(courierId);
@@ -215,15 +224,207 @@ function buildDispatchResult(packageId, type, success, reason, options = {}) {
   if (options.candidates) {
     result.candidates = options.candidates;
   }
+  if (options.invalidation_reason) {
+    result.invalidation_reason = options.invalidation_reason;
+  }
 
   return result;
 }
 
-async function previewDispatch(packageIds) {
+async function captureSnapshot(packageIds, previewDetails) {
+  const snapshot = {
+    packages: {},
+    couriers: {},
+    courier_zones: {},
+  };
+
+  const uniquePackageIds = [...new Set(packageIds)];
+  const packages = await allAsync(
+    'SELECT id, status, courier_id, site_id, zone_id, updated_at FROM package WHERE id IN (' +
+    uniquePackageIds.map(() => '?').join(',') + ')',
+    uniquePackageIds
+  );
+
+  for (const pkg of packages) {
+    snapshot.packages[pkg.id] = {
+      status: pkg.status,
+      courier_id: pkg.courier_id,
+      site_id: pkg.site_id,
+      zone_id: pkg.zone_id,
+      updated_at: pkg.updated_at,
+    };
+  }
+
+  const courierIds = new Set();
+  for (const detail of previewDetails) {
+    if (detail.recommended_courier && detail.recommended_courier.id) {
+      courierIds.add(detail.recommended_courier.id);
+    }
+    if (detail.candidates) {
+      for (const c of detail.candidates) {
+        courierIds.add(c.id);
+      }
+    }
+  }
+
+  if (courierIds.size > 0) {
+    const courierIdArray = [...courierIds];
+    const couriers = await allAsync(
+      'SELECT id, status, updated_at FROM courier WHERE id IN (' +
+      courierIdArray.map(() => '?').join(',') + ')',
+      courierIdArray
+    );
+
+    for (const courier of couriers) {
+      snapshot.couriers[courier.id] = {
+        status: courier.status,
+        updated_at: courier.updated_at,
+      };
+    }
+
+    const courierZones = await allAsync(
+      `SELECT cz.courier_id, cz.zone_id, dz.site_id
+       FROM courier_zone cz
+       LEFT JOIN delivery_zone dz ON cz.zone_id = dz.id
+       WHERE cz.courier_id IN (` + courierIdArray.map(() => '?').join(',') + ')',
+      courierIdArray
+    );
+
+    for (const cz of courierZones) {
+      const key = `${cz.courier_id}_${cz.zone_id}`;
+      snapshot.courier_zones[key] = {
+        courier_id: cz.courier_id,
+        zone_id: cz.zone_id,
+        site_id: cz.site_id,
+      };
+    }
+  }
+
+  return snapshot;
+}
+
+async function createDispatchPlan(previewResult, snapshot, operatorName) {
+  const planData = {
+    summary: previewResult.summary,
+    details: previewResult.details,
+    snapshot,
+  };
+
+  const expiresAt = new Date(Date.now() + PLAN_EXPIRE_MINUTES * 60 * 1000).toISOString();
+
+  const result = await runAsync(
+    `INSERT INTO dispatch_plan (status, operator_name, plan_data, expires_at)
+     VALUES (?, ?, ?, ?)`,
+    [DISPATCH_PLAN_STATUSES.PENDING, operatorName || null, JSON.stringify(planData), expiresAt]
+  );
+
+  return {
+    plan_id: result.lastID,
+    expires_at: expiresAt,
+    ...previewResult,
+  };
+}
+
+async function getDispatchPlan(planId) {
+  const plan = await getAsync(
+    'SELECT * FROM dispatch_plan WHERE id = ?',
+    [planId]
+  );
+
+  if (!plan) {
+    return null;
+  }
+
+  try {
+    plan.plan_data = JSON.parse(plan.plan_data);
+  } catch (e) {
+    return null;
+  }
+
+  return plan;
+}
+
+async function cleanupExpiredPlans() {
+  try {
+    await runAsync(
+      `UPDATE dispatch_plan SET status = ? WHERE status = ? AND expires_at < datetime('now')`,
+      [DISPATCH_PLAN_STATUSES.EXPIRED, DISPATCH_PLAN_STATUSES.PENDING]
+    );
+  } catch (e) {
+    console.warn('清理过期分派方案失败:', e.message);
+  }
+}
+
+async function verifySnapshot(currentData, snapshotData, pkg, recommendedCourier) {
+  const issues = [];
+
+  const currentPkg = currentData.packages[pkg.id];
+  const snapshotPkg = snapshotData.packages[pkg.id];
+
+  if (!snapshotPkg) {
+    issues.push('方案中无此包裹快照数据');
+    return issues;
+  }
+
+  if (!currentPkg) {
+    issues.push('包裹已不存在');
+    return issues;
+  }
+
+  if (currentPkg.status !== snapshotPkg.status) {
+    issues.push(`包裹状态已变更: ${snapshotPkg.status} → ${currentPkg.status}`);
+  }
+
+  if (currentPkg.courier_id !== snapshotPkg.courier_id) {
+    if (snapshotPkg.courier_id === null && currentPkg.courier_id !== null) {
+      issues.push('包裹已被分配给其他快递小哥');
+    } else if (snapshotPkg.courier_id !== null && currentPkg.courier_id === null) {
+      issues.push('包裹已取消分配');
+    } else {
+      issues.push(`包裹分配的小哥已变更`);
+    }
+  }
+
+  if (currentPkg.site_id !== snapshotPkg.site_id) {
+    issues.push(`包裹所属站点已变更`);
+  }
+
+  if (currentPkg.zone_id !== snapshotPkg.zone_id) {
+    issues.push(`包裹配送区域已变更`);
+  }
+
+  if (recommendedCourier) {
+    const currentCourier = currentData.couriers[recommendedCourier.id];
+    const snapshotCourier = snapshotData.couriers[recommendedCourier.id];
+
+    if (snapshotCourier && currentCourier) {
+      if (currentCourier.status !== snapshotCourier.status) {
+        issues.push(`推荐小哥【${recommendedCourier.name}】状态已变更: ${snapshotCourier.status} → ${currentCourier.status}`);
+      }
+    } else if (!currentCourier) {
+      issues.push(`推荐小哥【${recommendedCourier.name}】已不存在`);
+    }
+
+    if (pkg.zone_id && recommendedCourier) {
+      const zoneKey = `${recommendedCourier.id}_${pkg.zone_id}`;
+      const hadZone = !!snapshotData.courier_zones[zoneKey];
+      const hasZoneNow = !!currentData.courier_zones[zoneKey];
+      if (hadZone && !hasZoneNow) {
+        issues.push(`推荐小哥【${recommendedCourier.name}】已不再负责该包裹的配送区域`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+async function previewDispatch(packageIds, operatorName = '系统运营') {
   const results = [];
 
   if (!packageIds) {
     return {
+      plan_id: null,
+      expires_at: null,
       summary: { total: 0, success: 0, skipped: 0, failed: 0, data_error: 0 },
       details: [],
     };
@@ -337,32 +538,92 @@ async function previewDispatch(packageIds) {
     data_error: results.filter(r => r.type === DISPATCH_RESULT_TYPES.DATA_ERROR).length,
   };
 
-  return {
+  const previewResult = {
     summary,
     details: results,
   };
+
+  const snapshot = await captureSnapshot(seenIds, results);
+  const planResult = await createDispatchPlan(previewResult, snapshot, operatorName);
+
+  return planResult;
 }
 
-async function confirmDispatch(packageIds, operatorName = '系统运营') {
-  if (!packageIds) {
-    return {
-      summary: { total: 0, success: 0, skipped: 0, failed: 0, data_error: 0 },
-      details: [],
-    };
+async function confirmDispatch(planId, operatorName = '系统运营') {
+  await cleanupExpiredPlans();
+
+  const plan = await getDispatchPlan(planId);
+
+  if (!plan) {
+    throw new Error('分派方案不存在');
   }
 
-  let normalizedIds = packageIds;
-  if (!Array.isArray(normalizedIds)) {
-    normalizedIds = [normalizedIds];
+  if (plan.status === DISPATCH_PLAN_STATUSES.EXPIRED) {
+    throw new Error('分派方案已过期，请重新预览');
   }
 
-  const previewResult = await previewDispatch(normalizedIds);
-  const successItems = previewResult.details.filter(r => r.type === DISPATCH_RESULT_TYPES.SUCCESS);
+  if (plan.status === DISPATCH_PLAN_STATUSES.CONFIRMED) {
+    throw new Error('分派方案已确认，不可重复确认');
+  }
+
+  if (plan.status !== DISPATCH_PLAN_STATUSES.PENDING) {
+    throw new Error(`分派方案状态异常: ${plan.status}`);
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(plan.expires_at);
+  if (now > expiresAt) {
+    await runAsync(
+      'UPDATE dispatch_plan SET status = ? WHERE id = ?',
+      [DISPATCH_PLAN_STATUSES.EXPIRED, planId]
+    );
+    throw new Error('分派方案已过期，请重新预览');
+  }
+
+  const { details, snapshot } = plan.plan_data;
+
+  const packageIds = details.map(d => d.package_id).filter(Boolean);
+  const currentSnapshot = await captureSnapshot(packageIds, details);
 
   const confirmResults = [];
 
-  for (const item of successItems) {
+  for (const item of details) {
+    if (item.type !== DISPATCH_RESULT_TYPES.SUCCESS) {
+      confirmResults.push(item);
+      continue;
+    }
+
     try {
+      const pkg = await getAsync(
+        'SELECT p.*, s.name as site_name, dz.name as zone_name FROM package p ' +
+        'LEFT JOIN site s ON p.site_id = s.id ' +
+        'LEFT JOIN delivery_zone dz ON p.zone_id = dz.id ' +
+        'WHERE p.id = ?',
+        [item.package_id]
+      );
+
+      const issues = await verifySnapshot(
+        currentSnapshot,
+        snapshot,
+        { id: item.package_id, zone_id: pkg ? pkg.zone_id : null },
+        item.recommended_courier
+      );
+
+      if (issues.length > 0) {
+        confirmResults.push(buildDispatchResult(
+          item.package_id,
+          DISPATCH_RESULT_TYPES.INVALID,
+          false,
+          `方案已失效: ${issues.join('; ')}`,
+          {
+            package_info: item.package_info,
+            recommended_courier: item.recommended_courier,
+            invalidation_reason: issues,
+          }
+        ));
+        continue;
+      }
+
       const reValidation = await validatePackageForDispatch(item.package_id);
       if (!reValidation.valid) {
         if (reValidation.skipType === 'SKIPPED') {
@@ -400,7 +661,7 @@ async function confirmDispatch(packageIds, operatorName = '系统运营') {
             operatorType: OPERATOR_TYPES.ADMIN,
             operatorId: null,
             operatorName,
-            remark: `智能分派给快递小哥: ${item.recommended_courier.name}`,
+            remark: `智能分派给快递小哥: ${item.recommended_courier.name} (方案#${planId})`,
           },
           { courier_id: item.recommended_courier.id }
         );
@@ -421,28 +682,36 @@ async function confirmDispatch(packageIds, operatorName = '系统运营') {
     }
   }
 
-  const otherItems = previewResult.details.filter(r => r.type !== DISPATCH_RESULT_TYPES.SUCCESS);
-  const allResults = [...confirmResults, ...otherItems];
+  await runAsync(
+    `UPDATE dispatch_plan SET status = ?, confirmed_at = datetime('now','localtime') WHERE id = ?`,
+    [DISPATCH_PLAN_STATUSES.CONFIRMED, planId]
+  );
 
   const summary = {
-    total: allResults.length,
-    success: allResults.filter(r => r.type === DISPATCH_RESULT_TYPES.SUCCESS && r.confirmed).length,
-    skipped: allResults.filter(r => r.type === DISPATCH_RESULT_TYPES.SKIPPED).length,
-    failed: allResults.filter(r => r.type === DISPATCH_RESULT_TYPES.FAILED).length,
-    data_error: allResults.filter(r => r.type === DISPATCH_RESULT_TYPES.DATA_ERROR).length,
+    total: confirmResults.length,
+    success: confirmResults.filter(r => r.type === DISPATCH_RESULT_TYPES.SUCCESS && r.confirmed).length,
+    skipped: confirmResults.filter(r => r.type === DISPATCH_RESULT_TYPES.SKIPPED).length,
+    failed: confirmResults.filter(r => r.type === DISPATCH_RESULT_TYPES.FAILED).length,
+    data_error: confirmResults.filter(r => r.type === DISPATCH_RESULT_TYPES.DATA_ERROR).length,
+    invalid: confirmResults.filter(r => r.type === DISPATCH_RESULT_TYPES.INVALID).length,
   };
 
   return {
+    plan_id: planId,
     summary,
-    details: allResults,
+    details: confirmResults,
   };
 }
 
 module.exports = {
   DISPATCH_RESULT_TYPES,
+  DISPATCH_PLAN_STATUSES,
+  PLAN_EXPIRE_MINUTES,
   previewDispatch,
   confirmDispatch,
   findBestCourierForPackage,
   getAvailableCouriersBySiteAndZone,
   validatePackageForDispatch,
+  getDispatchPlan,
+  cleanupExpiredPlans,
 };

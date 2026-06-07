@@ -6,7 +6,7 @@ const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt'
 const { getCodPaymentByPackageId, VALID_COD_PAYMENT_STATUSES, PAYMENT_METHODS } = require('../services/cod_payment');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { isCourierInZone } = require('../services/zone');
-const { validateBatchAssign, validateDispatch } = require('../utils/validators');
+const { validateBatchAssign, validateDispatchPreview, validateDispatchConfirm } = require('../utils/validators');
 const { OPERATOR_TYPES, addPackageTrack, getPackageTracks, updatePackageStatusWithTrack } = require('../services/package_track');
 const { previewDispatch, confirmDispatch } = require('../services/dispatch');
 const { getAppointmentSummaryForPackage } = require('../services/delivery_appointment');
@@ -367,15 +367,15 @@ router.get('/:id', async (req, res) => {
 
 router.post('/dispatch/preview', async (req, res) => {
   try {
-    const validation = validateDispatch(req.body);
+    const validation = validateDispatchPreview(req.body);
     if (!validation.valid) {
       return res.status(400).json(fail(validation.message));
     }
 
-    const { package_ids } = validation.data;
-    const result = await previewDispatch(package_ids);
+    const { package_ids, operator_name } = validation.data;
+    const result = await previewDispatch(package_ids, operator_name);
 
-    res.json(success(result, '智能分派预览完成'));
+    res.json(success(result, '智能分派预览完成，方案已生成'));
   } catch (err) {
     console.error('智能分派预览失败:', err);
     res.status(500).json(fail('服务器内部错误'));
@@ -384,17 +384,21 @@ router.post('/dispatch/preview', async (req, res) => {
 
 router.post('/dispatch/confirm', async (req, res) => {
   try {
-    const validation = validateDispatch(req.body);
+    const validation = validateDispatchConfirm(req.body);
     if (!validation.valid) {
       return res.status(400).json(fail(validation.message));
     }
 
-    const { package_ids, operator_name } = validation.data;
-    const result = await confirmDispatch(package_ids, operator_name);
+    const { plan_id, operator_name } = validation.data;
+    const result = await confirmDispatch(plan_id, operator_name);
 
-    res.json(success(result, `智能分派确认完成: ${result.summary.success} 成功, ${result.summary.skipped} 跳过, ${result.summary.failed} 失败, ${result.summary.data_error} 数据异常`));
+    const { success: successCount, skipped, failed, data_error, invalid } = result.summary;
+    res.json(success(result, `智能分派确认完成: ${successCount} 成功, ${skipped} 跳过, ${failed} 失败, ${data_error} 数据异常, ${invalid || 0} 失效`));
   } catch (err) {
     console.error('智能分派确认失败:', err);
+    if (err.message && (err.message.includes('不存在') || err.message.includes('过期') || err.message.includes('重复') || err.message.includes('异常'))) {
+      return res.status(400).json(fail(err.message));
+    }
     res.status(500).json(fail('服务器内部错误'));
   }
 });

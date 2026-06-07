@@ -25,7 +25,7 @@ function validateBatchAssign(body) {
   return { valid: true, data: { package_ids: uniqueIds, courier_id } };
 }
 
-function validateDispatch(body) {
+function validateDispatchPreview(body) {
   if (!body || typeof body !== 'object') {
     return { valid: false, message: '请求体不能为空且必须为JSON对象' };
   }
@@ -67,9 +67,43 @@ function validateDispatch(body) {
   };
 }
 
+function validateDispatchConfirm(body) {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, message: '请求体不能为空且必须为JSON对象' };
+  }
+
+  const { plan_id, operator_name } = body;
+
+  if (plan_id === null || plan_id === undefined) {
+    return { valid: false, message: '请提供 plan_id 参数' };
+  }
+
+  if (!Number.isInteger(plan_id) || plan_id <= 0) {
+    return { valid: false, message: 'plan_id 必须为正整数' };
+  }
+
+  if (operator_name !== undefined && typeof operator_name !== 'string') {
+    return { valid: false, message: 'operator_name 必须为字符串类型' };
+  }
+
+  if (operator_name && operator_name.length > 100) {
+    return { valid: false, message: 'operator_name 长度不能超过100个字符' };
+  }
+
+  return {
+    valid: true,
+    data: {
+      plan_id,
+      operator_name: operator_name || '系统运营',
+    },
+  };
+}
+
 module.exports = {
   validateBatchAssign,
-  validateDispatch,
+  validateDispatch: validateDispatchPreview,
+  validateDispatchPreview,
+  validateDispatchConfirm,
   BATCH_ASSIGN_MAX_COUNT,
   DISPATCH_MAX_COUNT,
 };
