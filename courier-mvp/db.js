@@ -271,6 +271,21 @@ function initDatabase() {
           UNIQUE(settlement_date, courier_id)
         );`);
 
+        db.run(`CREATE TABLE IF NOT EXISTS zone_merge_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER NOT NULL,
+          source_zone_id INTEGER NOT NULL,
+          source_zone_name TEXT NOT NULL,
+          target_zone_id INTEGER NOT NULL,
+          target_zone_name TEXT NOT NULL,
+          packages_migrated INTEGER NOT NULL DEFAULT 0,
+          couriers_migrated INTEGER NOT NULL DEFAULT 0,
+          duplicate_courier_relations INTEGER NOT NULL DEFAULT 0,
+          operator_name TEXT,
+          remark TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );`);
+
         const courierCount = await getAsync('SELECT COUNT(*) as cnt FROM courier');
         if (courierCount.cnt === 0) {
           console.log('初始化种子数据...');

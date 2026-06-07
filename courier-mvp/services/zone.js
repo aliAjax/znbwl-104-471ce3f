@@ -1,4 +1,4 @@
-const { allAsync, getAsync, runAsync } = require('../db');
+const { allAsync, getAsync, runAsync, runInTransaction } = require('../db');
 
 async function createSite(name, address, phone) {
   const existing = await getAsync('SELECT id FROM site WHERE name = ?', [name]);
@@ -264,6 +264,152 @@ async function getAvailableCouriersForZone(zoneId) {
   return couriers;
 }
 
+async function mergeZones(sourceZoneId, targetZoneId, operatorName = '系统运营', remark = '') {
+  const sourceZone = await getZoneById(sourceZoneId);
+  if (!sourceZone) {
+    const err = new Error('源配送区域不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetZone = await getZoneById(targetZoneId);
+  if (!targetZone) {
+    const err = new Error('目标配送区域不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (sourceZone.site_id !== targetZone.site_id) {
+    const err = new Error('只能合并同一站点下的配送区域');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (sourceZone.id === targetZone.id) {
+    const err = new Error('源区域和目标区域不能相同');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const result = await runInTransaction(async () => {
+    const packagesResult = await runAsync(
+      'UPDATE package SET zone_id = ?, updated_at = datetime(\'now\',\'localtime\') WHERE zone_id = ?',
+      [targetZoneId, sourceZoneId]
+    );
+    const packagesMigrated = packagesResult.changes || 0;
+
+    const existingCouriers = await allAsync(
+      'SELECT courier_id FROM courier_zone WHERE zone_id = ?',
+      [targetZoneId]
+    );
+    const existingCourierIds = existingCouriers.map(c => c.courier_id);
+
+    const sourceCouriers = await allAsync(
+      'SELECT courier_id FROM courier_zone WHERE zone_id = ?',
+      [sourceZoneId]
+    );
+
+    let couriersMigrated = 0;
+    let duplicateCourierRelations = 0;
+
+    for (const sc of sourceCouriers) {
+      if (existingCourierIds.includes(sc.courier_id)) {
+        duplicateCourierRelations++;
+      } else {
+        await runAsync(
+          'INSERT INTO courier_zone (courier_id, zone_id) VALUES (?, ?)',
+          [sc.courier_id, targetZoneId]
+        );
+        couriersMigrated++;
+      }
+    }
+
+    await runAsync('DELETE FROM courier_zone WHERE zone_id = ?', [sourceZoneId]);
+
+    const logResult = await runAsync(
+      `INSERT INTO zone_merge_log 
+       (site_id, source_zone_id, source_zone_name, target_zone_id, target_zone_name, 
+        packages_migrated, couriers_migrated, duplicate_courier_relations, operator_name, remark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        sourceZone.site_id,
+        sourceZone.id,
+        sourceZone.name,
+        targetZone.id,
+        targetZone.name,
+        packagesMigrated,
+        couriersMigrated,
+        duplicateCourierRelations,
+        operatorName,
+        remark
+      ]
+    );
+
+    await runAsync('DELETE FROM delivery_zone WHERE id = ?', [sourceZoneId]);
+
+    const mergeLog = await getAsync('SELECT * FROM zone_merge_log WHERE id = ?', [logResult.lastID]);
+
+    return {
+      merge_log: mergeLog,
+      packages_migrated: packagesMigrated,
+      couriers_migrated: couriersMigrated,
+      duplicate_courier_relations: duplicateCourierRelations,
+      source_zone: { id: sourceZone.id, name: sourceZone.name },
+      target_zone: { id: targetZone.id, name: targetZone.name }
+    };
+  });
+
+  return result;
+}
+
+async function getZoneMergeLogs(siteId = null, page = 1, pageSize = 20) {
+  const offset = (page - 1) * pageSize;
+  let logs;
+  let total;
+
+  if (siteId) {
+    logs = await allAsync(
+      `SELECT * FROM zone_merge_log WHERE site_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [siteId, pageSize, offset]
+    );
+    total = await getAsync(
+      'SELECT COUNT(*) as cnt FROM zone_merge_log WHERE site_id = ?',
+      [siteId]
+    );
+  } else {
+    logs = await allAsync(
+      `SELECT * FROM zone_merge_log ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [pageSize, offset]
+    );
+    total = await getAsync('SELECT COUNT(*) as cnt FROM zone_merge_log');
+  }
+
+  return {
+    list: logs,
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: total.cnt
+    }
+  };
+}
+
+async function getZoneMergeLogById(id) {
+  const log = await getAsync(
+    `SELECT zml.*, s.name as site_name 
+     FROM zone_merge_log zml 
+     LEFT JOIN site s ON zml.site_id = s.id 
+     WHERE zml.id = ?`,
+    [id]
+  );
+  if (!log) {
+    const err = new Error('迁移记录不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+  return log;
+}
+
 module.exports = {
   createSite,
   updateSite,
@@ -282,4 +428,7 @@ module.exports = {
   getZoneCouriers,
   isCourierInZone,
   getAvailableCouriersForZone,
+  mergeZones,
+  getZoneMergeLogs,
+  getZoneMergeLogById,
 };

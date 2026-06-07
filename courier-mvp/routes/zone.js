@@ -17,6 +17,9 @@ const {
   getCourierZones,
   getZoneCouriers,
   getAvailableCouriersForZone,
+  mergeZones,
+  getZoneMergeLogs,
+  getZoneMergeLogById,
 } = require('../services/zone');
 
 const router = Router();
@@ -236,6 +239,59 @@ router.get('/zones/:id/couriers', async (req, res) => {
       return res.status(err.statusCode).json(fail(err.message));
     }
     console.error('查询区域负责快递小哥失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.post('/zones/merge', async (req, res) => {
+  try {
+    const { source_zone_id, target_zone_id, operator_name, remark } = req.body;
+    if (!source_zone_id || !target_zone_id) {
+      return res.status(400).json(fail('源区域ID和目标区域ID不能为空'));
+    }
+    const result = await mergeZones(
+      Number(source_zone_id),
+      Number(target_zone_id),
+      operator_name || '系统运营',
+      remark || ''
+    );
+    res.json(success(result, '区域合并成功'));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('区域合并失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/zone-merge-logs', async (req, res) => {
+  try {
+    const { site_id, page, page_size } = req.query;
+    const pageNum = page ? Number(page) : 1;
+    const pageSize = page_size ? Number(page_size) : 20;
+    const result = await getZoneMergeLogs(
+      site_id ? Number(site_id) : null,
+      pageNum,
+      pageSize
+    );
+    res.json(success(result));
+  } catch (err) {
+    console.error('查询区域合并记录失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/zone-merge-logs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const log = await getZoneMergeLogById(Number(id));
+    res.json(success(log));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('查询区域合并记录详情失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });
