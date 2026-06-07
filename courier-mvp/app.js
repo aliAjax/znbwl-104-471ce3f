@@ -34,7 +34,7 @@ app.get('/', (req, res) => {
       'GET    /api/couriers': '查询全部快递小哥',
       'GET    /api/couriers/:id/packages': '查询某个小哥的待派送包裹',
       'POST   /api/packages': '新增包裹 (body: {tracking_no?, sender_name?, sender_phone?, receiver_name, receiver_phone, receiver_address?, weight?, site_id?, zone_id?})',
-      'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx&site_id=xxx&zone_id=xxx&tracking_no=xxx&receiver_phone=xxx&receiver_address=xxx)',
+      'GET    /api/packages': '查看全部包裹列表 (?status=xxx&courier_id=xxx&site_id=xxx&zone_id=xxx&tracking_no=xxx&receiver_phone=xxx&receiver_address=xxx&is_cod=true|false&cod_payment_status=UNPAID|PAID|WAIVED)',
       'GET    /api/packages/:id': '查看包裹详情（含签收凭证、站点、区域信息）',
       'PUT    /api/packages/:id/assign': '把包裹分配给某个小哥 (body: {courier_id})，只能分配给负责同一区域且在岗的小哥',
       'POST   /api/packages/batch-assign': '批量分配包裹给某个小哥 (body: {package_ids: [1,2,3], courier_id})，每个包裹独立返回成功或失败原因',
@@ -99,6 +99,7 @@ app.get('/', (req, res) => {
     deliveryPreferences: ['PERSONAL_SIGN', 'AGENT_SIGN', 'SMART_CABINET', 'DOORSTEP', 'OTHER'],
     appointmentFilterTypes: ['today', 'overdue', 'upcoming', 'no_appointment'],
     codPaymentMethods: ['CASH', 'SCAN', 'WAIVED'],
+    codPaymentStatuses: ['UNPAID', 'PAID', 'WAIVED'],
   });
 });
 

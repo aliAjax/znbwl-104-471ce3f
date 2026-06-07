@@ -3,7 +3,7 @@ const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
 const { success, fail } = require('../utils/response');
 const { parsePaginationParams, buildPaginationResult } = require('../utils/pagination');
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
-const { getCodPaymentByPackageId } = require('../services/cod_payment');
+const { getCodPaymentByPackageId, VALID_COD_PAYMENT_STATUSES, PAYMENT_METHODS, getCodSummariesForPackageIds } = require('../services/cod_payment');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { isCourierInZone } = require('../services/zone');
 const { validateBatchAssign, validateDispatch } = require('../utils/validators');
@@ -210,11 +210,15 @@ router.put('/:id/status', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { status, courier_id, tracking_no, receiver_phone, receiver_address, site_id, zone_id } = req.query;
+    const { status, courier_id, tracking_no, receiver_phone, receiver_address, site_id, zone_id, is_cod, cod_payment_status } = req.query;
     const { page, pageSize, offset } = parsePaginationParams(req.query);
 
-    let countSql = 'SELECT COUNT(*) as total FROM package p WHERE 1=1';
-    let dataSql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name FROM package p LEFT JOIN courier c ON p.courier_id = c.id LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id WHERE 1=1';
+    if (cod_payment_status && !VALID_COD_PAYMENT_STATUSES.includes(cod_payment_status)) {
+      return res.status(400).json(fail(`无效的收款状态，可选值: ${VALID_COD_PAYMENT_STATUSES.join(', ')}`));
+    }
+
+    let countSql = 'SELECT COUNT(DISTINCT p.id) as total FROM package p LEFT JOIN cod_payment cp ON p.id = cp.package_id WHERE 1=1';
+    let dataSql = 'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name, cp.id as cod_payment_id, cp.payment_method as cod_payment_method, cp.amount as cod_paid_amount, cp.waived_reason as cod_waived_reason, cp.created_at as cod_paid_at, cp.operator_name as cod_paid_by FROM package p LEFT JOIN courier c ON p.courier_id = c.id LEFT JOIN site s ON p.site_id = s.id LEFT JOIN delivery_zone dz ON p.zone_id = dz.id LEFT JOIN cod_payment cp ON p.id = cp.package_id WHERE 1=1';
     const params = [];
 
     if (status) {
@@ -252,13 +256,72 @@ router.get('/', async (req, res) => {
       dataSql += ' AND p.zone_id = ?';
       params.push(zone_id);
     }
+    if (is_cod !== undefined) {
+      const codValue = is_cod === 'true' || is_cod === '1' || is_cod === 1 ? 1 : 0;
+      countSql += ' AND p.is_cod = ?';
+      dataSql += ' AND p.is_cod = ?';
+      params.push(codValue);
+    }
+    if (cod_payment_status) {
+      if (cod_payment_status === 'UNPAID') {
+        countSql += ' AND p.is_cod = 1 AND cp.id IS NULL';
+        dataSql += ' AND p.is_cod = 1 AND cp.id IS NULL';
+      } else if (cod_payment_status === 'PAID') {
+        countSql += ' AND p.is_cod = 1 AND cp.id IS NOT NULL AND cp.payment_method != ?';
+        dataSql += ' AND p.is_cod = 1 AND cp.id IS NOT NULL AND cp.payment_method != ?';
+        params.push(PAYMENT_METHODS.WAIVED);
+      } else if (cod_payment_status === 'WAIVED') {
+        countSql += ' AND p.is_cod = 1 AND cp.id IS NOT NULL AND cp.payment_method = ?';
+        dataSql += ' AND p.is_cod = 1 AND cp.id IS NOT NULL AND cp.payment_method = ?';
+        params.push(PAYMENT_METHODS.WAIVED);
+      }
+    }
 
     dataSql += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
 
     const countRow = await getAsync(countSql, params);
     const total = countRow.total;
     const packages = await allAsync(dataSql, [...params, pageSize, offset]);
-    const result = buildPaginationResult(packages, total, page, pageSize);
+
+    const packagesWithCod = packages.map(pkg => {
+      const result = { ...pkg };
+      if (pkg.is_cod) {
+        const codPayment = pkg.cod_payment_id ? {
+          payment_method: pkg.cod_payment_method,
+          amount: pkg.cod_paid_amount,
+          waived_reason: pkg.cod_waived_reason,
+          created_at: pkg.cod_paid_at,
+          operator_name: pkg.cod_paid_by,
+        } : null;
+        let payment_status = 'UNPAID';
+        if (codPayment) {
+          payment_status = codPayment.payment_method === PAYMENT_METHODS.WAIVED ? 'WAIVED' : 'PAID';
+        }
+        result.cod_summary = {
+          is_cod: true,
+          cod_amount: pkg.cod_amount,
+          payment_status,
+        };
+        if (codPayment) {
+          result.cod_summary.payment_method = codPayment.payment_method;
+          result.cod_summary.paid_amount = codPayment.amount;
+          result.cod_summary.waived_reason = codPayment.waived_reason;
+          result.cod_summary.paid_at = codPayment.created_at;
+          result.cod_summary.paid_by = codPayment.operator_name;
+        }
+      } else {
+        result.cod_summary = null;
+      }
+      delete result.cod_payment_id;
+      delete result.cod_payment_method;
+      delete result.cod_paid_amount;
+      delete result.cod_waived_reason;
+      delete result.cod_paid_at;
+      delete result.cod_paid_by;
+      return result;
+    });
+
+    const result = buildPaginationResult(packagesWithCod, total, page, pageSize);
 
     res.json(success(result));
   } catch (err) {

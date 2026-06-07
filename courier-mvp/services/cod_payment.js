@@ -14,6 +14,14 @@ const SETTLEMENT_STATUSES = {
   SETTLED: 'SETTLED',
 };
 
+const COD_PAYMENT_STATUSES = {
+  UNPAID: 'UNPAID',
+  PAID: 'PAID',
+  WAIVED: 'WAIVED',
+};
+
+const VALID_COD_PAYMENT_STATUSES = Object.values(COD_PAYMENT_STATUSES);
+
 async function createCodPayment({ package_id, courier_id, payment_method, amount, waived_reason, operator_type, operator_id, operator_name, remark }) {
   const pkg = await getAsync('SELECT * FROM package WHERE id = ?', [package_id]);
   if (!pkg) {
@@ -259,14 +267,86 @@ async function getPendingCodPackagesForCourier(courierId) {
   );
 }
 
+function getCodPaymentStatus(codPayment) {
+  if (!codPayment) {
+    return COD_PAYMENT_STATUSES.UNPAID;
+  }
+  if (codPayment.payment_method === PAYMENT_METHODS.WAIVED) {
+    return COD_PAYMENT_STATUSES.WAIVED;
+  }
+  return COD_PAYMENT_STATUSES.PAID;
+}
+
+function buildCodSummary(pkg, codPayment) {
+  if (!pkg.is_cod) {
+    return null;
+  }
+  const status = getCodPaymentStatus(codPayment);
+  const summary = {
+    is_cod: true,
+    cod_amount: pkg.cod_amount,
+    payment_status: status,
+  };
+  if (codPayment) {
+    summary.payment_method = codPayment.payment_method;
+    summary.paid_amount = codPayment.amount;
+    summary.waived_reason = codPayment.waived_reason || null;
+    summary.paid_at = codPayment.created_at;
+    summary.paid_by = codPayment.operator_name || null;
+  }
+  return summary;
+}
+
+async function getCodSummaryByPackageId(packageId) {
+  const pkg = await getAsync('SELECT is_cod, cod_amount FROM package WHERE id = ?', [packageId]);
+  if (!pkg || !pkg.is_cod) {
+    return null;
+  }
+  const codPayment = await getCodPaymentByPackageId(packageId);
+  return buildCodSummary(pkg, codPayment);
+}
+
+async function getCodSummariesForPackageIds(packageIds) {
+  if (!packageIds || packageIds.length === 0) {
+    return {};
+  }
+  const placeholders = packageIds.map(() => '?').join(',');
+  const rows = await allAsync(
+    `SELECT p.id as package_id, p.is_cod, p.cod_amount,
+            cp.id as payment_id, cp.payment_method, cp.amount, cp.waived_reason, cp.created_at, cp.operator_name
+     FROM package p
+     LEFT JOIN cod_payment cp ON p.id = cp.package_id
+     WHERE p.id IN (${placeholders})`,
+    packageIds
+  );
+  const result = {};
+  for (const row of rows) {
+    const codPayment = row.payment_id ? {
+      payment_method: row.payment_method,
+      amount: row.amount,
+      waived_reason: row.waived_reason,
+      created_at: row.created_at,
+      operator_name: row.operator_name,
+    } : null;
+    result[row.package_id] = buildCodSummary(row, codPayment);
+  }
+  return result;
+}
+
 module.exports = {
   PAYMENT_METHODS,
   VALID_PAYMENT_METHODS,
   SETTLEMENT_STATUSES,
+  COD_PAYMENT_STATUSES,
+  VALID_COD_PAYMENT_STATUSES,
   createCodPayment,
   getCodPaymentByPackageId,
   listCodPayments,
   getCourierDailyCodSummary,
   getCodSettlementReport,
   getPendingCodPackagesForCourier,
+  getCodPaymentStatus,
+  buildCodSummary,
+  getCodSummaryByPackageId,
+  getCodSummariesForPackageIds,
 };
