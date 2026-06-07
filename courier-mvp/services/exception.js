@@ -1,4 +1,5 @@
-const { runAsync, allAsync, getAsync } = require('../db');
+const { runAsync, allAsync, getAsync, runInTransaction } = require('../db');
+const { OPERATOR_TYPES, _updatePackageStatusWithTrackInternal } = require('./package_track');
 
 const VALID_EXCEPTION_TYPES = [
   'REFUSED',
@@ -52,18 +53,28 @@ async function createException({ package_id, courier_id, exception_type, descrip
     throw err;
   }
 
-  const result = await runAsync(
-    `INSERT INTO exception_record (package_id, courier_id, exception_type, description, on_site_remark, status)
-     VALUES (?, ?, ?, ?, ?, 'PENDING')`,
-    [package_id, courier_id, exception_type, description || null, on_site_remark || null]
-  );
+  const recordId = await runInTransaction(async () => {
+    const result = await runAsync(
+      `INSERT INTO exception_record (package_id, courier_id, exception_type, description, on_site_remark, status)
+       VALUES (?, ?, ?, ?, ?, 'PENDING')`,
+      [package_id, courier_id, exception_type, description || null, on_site_remark || null]
+    );
 
-  await runAsync(
-    `UPDATE package SET status = 'FAILED', updated_at = datetime('now','localtime') WHERE id = ? AND status = 'DELIVERING'`,
-    [package_id]
-  );
+    await _updatePackageStatusWithTrackInternal(
+      package_id,
+      'FAILED',
+      {
+        operatorType: OPERATOR_TYPES.COURIER,
+        operatorId: courier_id,
+        operatorName: courier.name,
+        remark: `登记异常: ${exception_type}${description ? ` - ${description}` : ''}`,
+      }
+    );
 
-  const record = await getAsync('SELECT * FROM exception_record WHERE id = ?', [result.lastID]);
+    return result.lastID;
+  });
+
+  const record = await getAsync('SELECT * FROM exception_record WHERE id = ?', [recordId]);
   return record;
 }
 

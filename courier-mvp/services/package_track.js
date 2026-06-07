@@ -52,6 +52,60 @@ async function getPackageTracks(packageId) {
   return tracks;
 }
 
+async function _updatePackageStatusWithTrackInternal(
+  packageId,
+  newStatus,
+  trackData = {},
+  extraUpdates = {}
+) {
+  const pkg = await getAsync('SELECT * FROM package WHERE id = ?', [packageId]);
+  if (!pkg) {
+    const err = new Error('包裹不存在');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const oldStatus = pkg.status;
+
+  if (oldStatus === newStatus) {
+    return { package: pkg, trackId: null, statusUnchanged: true };
+  }
+
+  const updateFields = ['status = ?', 'updated_at = datetime(\'now\',\'localtime\')'];
+  const updateParams = [newStatus];
+
+  for (const [key, value] of Object.entries(extraUpdates)) {
+    updateFields.push(`${key} = ?`);
+    updateParams.push(value);
+  }
+
+  updateParams.push(packageId);
+
+  await runAsync(
+    `UPDATE package SET ${updateFields.join(', ')} WHERE id = ?`,
+    updateParams
+  );
+
+  const trackId = await addPackageTrack({
+    packageId,
+    oldStatus,
+    newStatus,
+    ...trackData,
+  });
+
+  const updatedPackage = await getAsync(
+    'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name ' +
+    'FROM package p ' +
+    'LEFT JOIN courier c ON p.courier_id = c.id ' +
+    'LEFT JOIN site s ON p.site_id = s.id ' +
+    'LEFT JOIN delivery_zone dz ON p.zone_id = dz.id ' +
+    'WHERE p.id = ?',
+    [packageId]
+  );
+
+  return { package: updatedPackage, trackId, statusUnchanged: false };
+}
+
 async function updatePackageStatusWithTrack(
   packageId,
   newStatus,
@@ -59,52 +113,7 @@ async function updatePackageStatusWithTrack(
   extraUpdates = {}
 ) {
   return runInTransaction(async () => {
-    const pkg = await getAsync('SELECT * FROM package WHERE id = ?', [packageId]);
-    if (!pkg) {
-      const err = new Error('包裹不存在');
-      err.statusCode = 404;
-      throw err;
-    }
-
-    const oldStatus = pkg.status;
-
-    if (oldStatus === newStatus) {
-      return { package: pkg, trackId: null, statusUnchanged: true };
-    }
-
-    const updateFields = ['status = ?', 'updated_at = datetime(\'now\',\'localtime\')'];
-    const updateParams = [newStatus];
-
-    for (const [key, value] of Object.entries(extraUpdates)) {
-      updateFields.push(`${key} = ?`);
-      updateParams.push(value);
-    }
-
-    updateParams.push(packageId);
-
-    await runAsync(
-      `UPDATE package SET ${updateFields.join(', ')} WHERE id = ?`,
-      updateParams
-    );
-
-    const trackId = await addPackageTrack({
-      packageId,
-      oldStatus,
-      newStatus,
-      ...trackData,
-    });
-
-    const updatedPackage = await getAsync(
-      'SELECT p.*, c.name as courier_name, c.phone as courier_phone, s.name as site_name, dz.name as zone_name ' +
-      'FROM package p ' +
-      'LEFT JOIN courier c ON p.courier_id = c.id ' +
-      'LEFT JOIN site s ON p.site_id = s.id ' +
-      'LEFT JOIN delivery_zone dz ON p.zone_id = dz.id ' +
-      'WHERE p.id = ?',
-      [packageId]
-    );
-
-    return { package: updatedPackage, trackId, statusUnchanged: false };
+    return _updatePackageStatusWithTrackInternal(packageId, newStatus, trackData, extraUpdates);
   });
 }
 
@@ -113,4 +122,5 @@ module.exports = {
   addPackageTrack,
   getPackageTracks,
   updatePackageStatusWithTrack,
+  _updatePackageStatusWithTrackInternal,
 };
