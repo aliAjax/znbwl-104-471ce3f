@@ -1,7 +1,7 @@
 const { allAsync, getAsync, runAsync, runInTransaction } = require('../db');
 const { isCourierOnDuty, getCourierUnfinishedPackageCount } = require('./workstation');
 const { isCourierInZone, getAvailableCouriersForZone } = require('./zone');
-const { OPERATOR_TYPES, _updatePackageStatusWithTrackInternal, addPackageTrack } = require('./package_track');
+const { OPERATOR_TYPES, addPackageTrack } = require('./package_track');
 const { checkAppointmentConflict } = require('./delivery_appointment');
 const { getCodPaymentByPackageId } = require('./cod_payment');
 
@@ -130,10 +130,13 @@ async function previewHandover(sourceCourierId, packageIds = null) {
     throw err;
   }
 
-  let packages;
+  const results = [];
+  const packageMap = new Map();
+
   if (packageIds && packageIds.length > 0) {
-    const placeholders = packageIds.map(() => '?').join(',');
-    packages = await allAsync(
+    const uniqueIds = [...new Set(packageIds)];
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const packages = await allAsync(
       `SELECT p.*, s.name as site_name, dz.name as zone_name,
               da.appointment_start, da.appointment_end, da.status as appointment_status,
               er.id as exception_id, er.status as exception_status, er.exception_type,
@@ -144,21 +147,28 @@ async function previewHandover(sourceCourierId, packageIds = null) {
        LEFT JOIN delivery_appointment da ON p.id = da.package_id AND da.status = 'ACTIVE'
        LEFT JOIN exception_record er ON p.id = er.package_id AND er.status IN ('PENDING', 'PROCESSING')
        LEFT JOIN cod_payment cp ON p.id = cp.package_id
-       WHERE p.courier_id = ? AND p.id IN (${placeholders})
+       WHERE p.id IN (${placeholders})
        ORDER BY p.id`,
-      [sourceCourierId, ...packageIds]
+      [...uniqueIds]
     );
-  } else {
-    packages = await getCourierUnfinishedPackages(sourceCourierId);
-  }
 
-  const results = [];
+    for (const pkg of packages) {
+      packageMap.set(pkg.id, pkg);
+    }
 
-  for (const pkg of packages) {
-    try {
-      if (pkg.courier_id !== sourceCourierId) {
+    for (const id of uniqueIds) {
+      const pkg = packageMap.get(id);
+      if (!pkg) {
         results.push({
-          package_id: pkg.id,
+          package_id: id,
+          tracking_no: null,
+          type: HANDOVER_RESULT_TYPES.FAILED,
+          success: false,
+          reason: '包裹不存在',
+        });
+      } else if (pkg.courier_id !== sourceCourierId) {
+        results.push({
+          package_id: id,
           tracking_no: pkg.tracking_no,
           type: HANDOVER_RESULT_TYPES.SKIPPED,
           success: false,
@@ -171,18 +181,13 @@ async function previewHandover(sourceCourierId, packageIds = null) {
             has_exception: !!pkg.exception_id,
           },
         });
-        continue;
-      }
-
-      const { courier, reason, candidates } = await findBestTargetCourier(sourceCourierId, pkg);
-
-      if (!courier) {
+      } else if (!UNFINISHED_STATUSES.includes(pkg.status)) {
         results.push({
-          package_id: pkg.id,
+          package_id: id,
           tracking_no: pkg.tracking_no,
-          type: HANDOVER_RESULT_TYPES.FAILED,
+          type: HANDOVER_RESULT_TYPES.SKIPPED,
           success: false,
-          reason,
+          reason: `包裹状态为 ${pkg.status}，仅 ASSIGNED、PICKED_UP、DELIVERING 状态可交接`,
           package_info: {
             status: pkg.status,
             zone_name: pkg.zone_name,
@@ -191,24 +196,177 @@ async function previewHandover(sourceCourierId, packageIds = null) {
             has_exception: !!pkg.exception_id,
           },
         });
-        continue;
+      } else {
+        try {
+          const { courier, reason, candidates } = await findBestTargetCourier(sourceCourierId, pkg);
+
+          if (!courier) {
+            results.push({
+              package_id: id,
+              tracking_no: pkg.tracking_no,
+              type: HANDOVER_RESULT_TYPES.FAILED,
+              success: false,
+              reason,
+              package_info: {
+                status: pkg.status,
+                zone_name: pkg.zone_name,
+                has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+                is_cod: !!pkg.is_cod,
+                has_exception: !!pkg.exception_id,
+              },
+            });
+            continue;
+          }
+
+          const validation = await validatePackageForHandover(pkg, courier.id);
+
+          if (!validation.valid) {
+            results.push({
+              package_id: id,
+              tracking_no: pkg.tracking_no,
+              type: HANDOVER_RESULT_TYPES.FAILED,
+              success: false,
+              reason: validation.errors.join('; '),
+              target_courier: {
+                id: courier.id,
+                name: courier.name,
+                phone: courier.phone,
+                unfinished_count: courier.unfinished_count,
+              },
+              package_info: {
+                status: pkg.status,
+                zone_name: pkg.zone_name,
+                has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+                is_cod: !!pkg.is_cod,
+                has_exception: !!pkg.exception_id,
+              },
+            });
+            continue;
+          }
+
+          results.push({
+            package_id: id,
+            tracking_no: pkg.tracking_no,
+            type: HANDOVER_RESULT_TYPES.SUCCESS,
+            success: true,
+            reason,
+            target_courier: {
+              id: courier.id,
+              name: courier.name,
+              phone: courier.phone,
+              unfinished_count: courier.unfinished_count,
+            },
+            candidates: candidates.map(c => ({
+              id: c.id,
+              name: c.name,
+              phone: c.phone,
+              unfinished_count: c.unfinished_count,
+            })),
+            package_info: {
+              status: pkg.status,
+              zone_name: pkg.zone_name,
+              has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+              is_cod: !!pkg.is_cod,
+              has_exception: !!pkg.exception_id,
+            },
+          });
+        } catch (err) {
+          results.push({
+            package_id: id,
+            tracking_no: pkg.tracking_no,
+            type: HANDOVER_RESULT_TYPES.FAILED,
+            success: false,
+            reason: `处理异常: ${err.message}`,
+          });
+        }
       }
+    }
+  } else {
+    const packages = await getCourierUnfinishedPackages(sourceCourierId);
+    for (const pkg of packages) {
+      try {
+        if (pkg.courier_id !== sourceCourierId) {
+          results.push({
+            package_id: pkg.id,
+            tracking_no: pkg.tracking_no,
+            type: HANDOVER_RESULT_TYPES.SKIPPED,
+            success: false,
+            reason: '该包裹不属于当前小哥',
+            package_info: {
+              status: pkg.status,
+              zone_name: pkg.zone_name,
+              has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+              is_cod: !!pkg.is_cod,
+              has_exception: !!pkg.exception_id,
+            },
+          });
+          continue;
+        }
 
-      const validation = await validatePackageForHandover(pkg, courier.id);
+        const { courier, reason, candidates } = await findBestTargetCourier(sourceCourierId, pkg);
 
-      if (!validation.valid) {
+        if (!courier) {
+          results.push({
+            package_id: pkg.id,
+            tracking_no: pkg.tracking_no,
+            type: HANDOVER_RESULT_TYPES.FAILED,
+            success: false,
+            reason,
+            package_info: {
+              status: pkg.status,
+              zone_name: pkg.zone_name,
+              has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+              is_cod: !!pkg.is_cod,
+              has_exception: !!pkg.exception_id,
+            },
+          });
+          continue;
+        }
+
+        const validation = await validatePackageForHandover(pkg, courier.id);
+
+        if (!validation.valid) {
+          results.push({
+            package_id: pkg.id,
+            tracking_no: pkg.tracking_no,
+            type: HANDOVER_RESULT_TYPES.FAILED,
+            success: false,
+            reason: validation.errors.join('; '),
+            target_courier: {
+              id: courier.id,
+              name: courier.name,
+              phone: courier.phone,
+              unfinished_count: courier.unfinished_count,
+            },
+            package_info: {
+              status: pkg.status,
+              zone_name: pkg.zone_name,
+              has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
+              is_cod: !!pkg.is_cod,
+              has_exception: !!pkg.exception_id,
+            },
+          });
+          continue;
+        }
+
         results.push({
           package_id: pkg.id,
           tracking_no: pkg.tracking_no,
-          type: HANDOVER_RESULT_TYPES.FAILED,
-          success: false,
-          reason: validation.errors.join('; '),
+          type: HANDOVER_RESULT_TYPES.SUCCESS,
+          success: true,
+          reason,
           target_courier: {
             id: courier.id,
             name: courier.name,
             phone: courier.phone,
             unfinished_count: courier.unfinished_count,
           },
+          candidates: candidates.map(c => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            unfinished_count: c.unfinished_count,
+          })),
           package_info: {
             status: pkg.status,
             zone_name: pkg.zone_name,
@@ -217,43 +375,15 @@ async function previewHandover(sourceCourierId, packageIds = null) {
             has_exception: !!pkg.exception_id,
           },
         });
-        continue;
+      } catch (err) {
+        results.push({
+          package_id: pkg.id,
+          tracking_no: pkg.tracking_no,
+          type: HANDOVER_RESULT_TYPES.FAILED,
+          success: false,
+          reason: `处理异常: ${err.message}`,
+        });
       }
-
-      results.push({
-        package_id: pkg.id,
-        tracking_no: pkg.tracking_no,
-        type: HANDOVER_RESULT_TYPES.SUCCESS,
-        success: true,
-        reason,
-        target_courier: {
-          id: courier.id,
-          name: courier.name,
-          phone: courier.phone,
-          unfinished_count: courier.unfinished_count,
-        },
-        candidates: candidates.map(c => ({
-          id: c.id,
-          name: c.name,
-          phone: c.phone,
-          unfinished_count: c.unfinished_count,
-        })),
-        package_info: {
-          status: pkg.status,
-          zone_name: pkg.zone_name,
-          has_appointment: !!(pkg.appointment_start && pkg.appointment_status === 'ACTIVE'),
-          is_cod: !!pkg.is_cod,
-          has_exception: !!pkg.exception_id,
-        },
-      });
-    } catch (err) {
-      results.push({
-        package_id: pkg.id,
-        tracking_no: pkg.tracking_no,
-        type: HANDOVER_RESULT_TYPES.FAILED,
-        success: false,
-        reason: `处理异常: ${err.message}`,
-      });
     }
   }
 
@@ -289,7 +419,12 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
     throw err;
   }
 
-  const placeholders = packageIds.map(() => '?').join(',');
+  const results = [];
+  const operator = operatorName || sourceCourier.name;
+  const uniqueIds = [...new Set(packageIds)];
+  const packageMap = new Map();
+
+  const placeholders = uniqueIds.map(() => '?').join(',');
   const packages = await allAsync(
     `SELECT p.*, s.name as site_name, dz.name as zone_name,
             da.appointment_start, da.appointment_end, da.status as appointment_status,
@@ -301,21 +436,34 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
      LEFT JOIN delivery_appointment da ON p.id = da.package_id AND da.status = 'ACTIVE'
      LEFT JOIN exception_record er ON p.id = er.package_id AND er.status IN ('PENDING', 'PROCESSING')
      LEFT JOIN cod_payment cp ON p.id = cp.package_id
-     WHERE p.courier_id = ? AND p.id IN (${placeholders})
+     WHERE p.id IN (${placeholders})
      ORDER BY p.id`,
-    [sourceCourierId, ...packageIds]
+    [...uniqueIds]
   );
 
-  const results = [];
-  const operator = operatorName || sourceCourier.name;
-
   for (const pkg of packages) {
+    packageMap.set(pkg.id, pkg);
+  }
+
+  for (const id of uniqueIds) {
+    const pkg = packageMap.get(id);
     try {
-      const currentPkg = await getAsync('SELECT * FROM package WHERE id = ?', [pkg.id]);
+      if (!pkg) {
+        results.push({
+          package_id: id,
+          tracking_no: null,
+          type: HANDOVER_RESULT_TYPES.FAILED,
+          success: false,
+          reason: '包裹不存在',
+        });
+        continue;
+      }
+
+      const currentPkg = await getAsync('SELECT * FROM package WHERE id = ?', [id]);
       if (!currentPkg || currentPkg.courier_id !== sourceCourierId) {
         results.push({
-          package_id: pkg.id,
-          tracking_no: pkg.tracking_no,
+          package_id: id,
+          tracking_no: pkg ? pkg.tracking_no : null,
           type: HANDOVER_RESULT_TYPES.SKIPPED,
           success: false,
           reason: '包裹信息已变更，不属于当前小哥',
@@ -325,8 +473,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
 
       if (!UNFINISHED_STATUSES.includes(currentPkg.status)) {
         results.push({
-          package_id: pkg.id,
-          tracking_no: pkg.tracking_no,
+          package_id: id,
+          tracking_no: pkg ? pkg.tracking_no : null,
           type: HANDOVER_RESULT_TYPES.SKIPPED,
           success: false,
           reason: `包裹状态已变更为 ${currentPkg.status}，无法交接`,
@@ -339,8 +487,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
         targetCourier = await getAsync('SELECT * FROM courier WHERE id = ?', [targetCourierId]);
         if (!targetCourier) {
           results.push({
-            package_id: pkg.id,
-            tracking_no: pkg.tracking_no,
+            package_id: id,
+            tracking_no: pkg ? pkg.tracking_no : null,
             type: HANDOVER_RESULT_TYPES.FAILED,
             success: false,
             reason: '目标小哥不存在',
@@ -349,8 +497,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
         }
         if (!isCourierOnDuty(targetCourier)) {
           results.push({
-            package_id: pkg.id,
-            tracking_no: pkg.tracking_no,
+            package_id: id,
+            tracking_no: pkg ? pkg.tracking_no : null,
             type: HANDOVER_RESULT_TYPES.FAILED,
             success: false,
             reason: '目标小哥当前不在岗',
@@ -361,8 +509,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
         const matchResult = await findBestTargetCourier(sourceCourierId, pkg);
         if (!matchResult.courier) {
           results.push({
-            package_id: pkg.id,
-            tracking_no: pkg.tracking_no,
+            package_id: id,
+            tracking_no: pkg ? pkg.tracking_no : null,
             type: HANDOVER_RESULT_TYPES.FAILED,
             success: false,
             reason: matchResult.reason,
@@ -375,8 +523,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
       const validation = await validatePackageForHandover(pkg, targetCourier.id);
       if (!validation.valid) {
         results.push({
-          package_id: pkg.id,
-          tracking_no: pkg.tracking_no,
+          package_id: id,
+          tracking_no: pkg ? pkg.tracking_no : null,
           type: HANDOVER_RESULT_TYPES.FAILED,
           success: false,
           reason: validation.errors.join('; '),
@@ -392,11 +540,11 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
       await runInTransaction(async () => {
         await runAsync(
           'UPDATE package SET courier_id = ?, updated_at = datetime(\'now\',\'localtime\') WHERE id = ?',
-          [targetCourier.id, pkg.id]
+          [targetCourier.id, id]
         );
 
         await addPackageTrack({
-          packageId: pkg.id,
+          packageId: id,
           oldStatus: currentPkg.status,
           newStatus: currentPkg.status,
           operatorType: OPERATOR_TYPES.COURIER,
@@ -407,8 +555,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
       });
 
       results.push({
-        package_id: pkg.id,
-        tracking_no: pkg.tracking_no,
+        package_id: id,
+        tracking_no: pkg ? pkg.tracking_no : null,
         type: HANDOVER_RESULT_TYPES.SUCCESS,
         success: true,
         reason: '交接成功',
@@ -420,8 +568,8 @@ async function executeHandover(sourceCourierId, packageIds, targetCourierId = nu
       });
     } catch (err) {
       results.push({
-        package_id: pkg.id,
-        tracking_no: pkg.tracking_no,
+        package_id: id,
+        tracking_no: pkg ? pkg.tracking_no : null,
         type: HANDOVER_RESULT_TYPES.FAILED,
         success: false,
         reason: `交接失败: ${err.message}`,

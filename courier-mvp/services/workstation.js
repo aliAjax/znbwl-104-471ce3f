@@ -181,7 +181,7 @@ function isCourierOnDuty(courier) {
   return courier && courier.status === COURIER_STATUSES.ON_DUTY;
 }
 
-async function updateCourierStatus(courierId, status, options = {}) {
+async function updateCourierStatus(courierId, status) {
   if (!VALID_COURIER_STATUSES.includes(status)) {
     const err = new Error(`无效的状态，可选值: ${VALID_COURIER_STATUSES.join(', ')}`);
     err.statusCode = 400;
@@ -203,7 +203,7 @@ async function updateCourierStatus(courierId, status, options = {}) {
 
   if (status === COURIER_STATUSES.OFF_DUTY) {
     const unfinishedCount = await getCourierUnfinishedPackageCount(courierId);
-    if (unfinishedCount > 0 && !options.allow_handover) {
+    if (unfinishedCount > 0) {
       const err = new Error(`该快递小哥名下还有 ${unfinishedCount} 个未完成包裹，请先完成交接班再下班`);
       err.statusCode = 400;
       err.unfinished_count = unfinishedCount;

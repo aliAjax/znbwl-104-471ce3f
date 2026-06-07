@@ -65,15 +65,11 @@ router.get('/:courierId/pending-packages', async (req, res) => {
 router.put('/:courierId/status', async (req, res) => {
   try {
     const { courierId } = req.params;
-    const { status, allow_handover } = req.body;
+    const { status } = req.body;
     if (!status) {
       return res.status(400).json(fail('状态不能为空'));
     }
-    const options = {};
-    if (allow_handover !== undefined) {
-      options.allow_handover = allow_handover;
-    }
-    const updatedCourier = await updateCourierStatus(courierId, status, options);
+    const updatedCourier = await updateCourierStatus(courierId, status);
     res.json(success(updatedCourier, '快递小哥状态更新成功'));
   } catch (err) {
     if (err.statusCode) {
