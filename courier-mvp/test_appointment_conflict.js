@@ -1,5 +1,17 @@
-const { initDatabase, closeDatabase, runAsync, getAsync } = require('./db');
+const { initDatabase, closeDatabase, runAsync, getAsync, allAsync } = require('./db');
 const { createAppointment, updateAppointment, checkAppointmentConflict, cancelAppointment } = require('./services/delivery_appointment');
+
+const TEST_PACKAGE_IDS = [1, 3, 4];
+
+async function cleanupTestData() {
+  await runAsync("DELETE FROM delivery_appointment_change_log WHERE package_id IN (" + TEST_PACKAGE_IDS.join(',') + ")");
+  await runAsync("DELETE FROM delivery_appointment WHERE package_id IN (" + TEST_PACKAGE_IDS.join(',') + ")");
+}
+
+async function restoreOriginalData() {
+  await cleanupTestData();
+  await runAsync("UPDATE package SET status = 'CREATED', courier_id = NULL WHERE id = 1");
+}
 
 async function testConflictCheck() {
   console.log('=== 开始测试预约时间冲突检查 ===\n');
@@ -8,8 +20,7 @@ async function testConflictCheck() {
     await initDatabase();
 
     console.log('1. 清理测试数据...');
-    await runAsync("DELETE FROM delivery_appointment_change_log WHERE package_id IN (SELECT id FROM package WHERE courier_id = 1)");
-    await runAsync("DELETE FROM delivery_appointment WHERE package_id IN (SELECT id FROM package WHERE courier_id = 1)");
+    await cleanupTestData();
 
     console.log('\n2. 测试为包裹 3 创建预约（小哥 ID 1）...');
     const appt1 = await createAppointment({
@@ -134,6 +145,13 @@ async function testConflictCheck() {
   } catch (err) {
     console.error('测试出错:', err);
   } finally {
+    console.log('\n清理测试数据，恢复原始状态...');
+    try {
+      await restoreOriginalData();
+      console.log('✓ 数据恢复完成');
+    } catch (cleanupErr) {
+      console.error('清理数据时出错:', cleanupErr.message);
+    }
     closeDatabase();
   }
 }
