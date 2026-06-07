@@ -352,22 +352,25 @@ async function getPackageTimeline(packageId) {
   events.sort((a, b) => {
     const timeA = new Date(a.occurred_at).getTime();
     const timeB = new Date(b.occurred_at).getTime();
-    
+
     if (timeA !== timeB) {
       return timeA - timeB;
     }
-    
-    const idA = parseInt(a.raw_data_id) || 0;
-    const idB = parseInt(b.raw_data_id) || 0;
-    
-    if (idA !== idB) {
-      return idA - idB;
-    }
-    
+
     const orderA = EVENT_TYPE_ORDER[a.event_type] ?? 99;
     const orderB = EVENT_TYPE_ORDER[b.event_type] ?? 99;
-    
-    return orderA - orderB;
+    const idA = parseInt(a.raw_data_id) || 0;
+    const idB = parseInt(b.raw_data_id) || 0;
+
+    if (a.raw_data_type === b.raw_data_type && idA !== idB) {
+      return idA - idB;
+    }
+
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+
+    return idA - idB;
   });
 
   return events;
