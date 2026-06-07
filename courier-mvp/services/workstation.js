@@ -1,4 +1,4 @@
-const { allAsync, getAsync } = require('../db');
+const { allAsync, getAsync, runAsync } = require('../db');
 const { isCourierInZone } = require('./zone');
 const { OPERATOR_TYPES, updatePackageStatusWithTrack } = require('./package_track');
 

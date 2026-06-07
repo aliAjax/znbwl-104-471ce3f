@@ -5,8 +5,9 @@ const { parsePaginationParams, buildPaginationResult } = require('../utils/pagin
 const { getDeliveryReceiptByPackageId } = require('../services/delivery_receipt');
 const { batchAssignPackages, isCourierOnDuty } = require('../services/workstation');
 const { isCourierInZone } = require('../services/zone');
-const { validateBatchAssign } = require('../utils/validators');
+const { validateBatchAssign, validateDispatch } = require('../utils/validators');
 const { OPERATOR_TYPES, addPackageTrack, getPackageTracks, updatePackageStatusWithTrack } = require('../services/package_track');
+const { previewDispatch, confirmDispatch } = require('../services/dispatch');
 
 const router = Router();
 
@@ -279,6 +280,40 @@ router.get('/:id', async (req, res) => {
     res.json(success(result));
   } catch (err) {
     console.error('查询包裹详情失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.post('/dispatch/preview', async (req, res) => {
+  try {
+    const validation = validateDispatch(req.body);
+    if (!validation.valid) {
+      return res.status(400).json(fail(validation.message));
+    }
+
+    const { package_ids } = validation.data;
+    const result = await previewDispatch(package_ids);
+
+    res.json(success(result, '智能分派预览完成'));
+  } catch (err) {
+    console.error('智能分派预览失败:', err);
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.post('/dispatch/confirm', async (req, res) => {
+  try {
+    const validation = validateDispatch(req.body);
+    if (!validation.valid) {
+      return res.status(400).json(fail(validation.message));
+    }
+
+    const { package_ids, operator_name } = validation.data;
+    const result = await confirmDispatch(package_ids, operator_name);
+
+    res.json(success(result, `智能分派确认完成: ${result.summary.success} 成功, ${result.summary.skipped} 跳过, ${result.summary.failed} 失败, ${result.summary.data_error} 数据异常`));
+  } catch (err) {
+    console.error('智能分派确认失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });

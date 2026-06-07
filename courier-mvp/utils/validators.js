@@ -1,4 +1,5 @@
 const BATCH_ASSIGN_MAX_COUNT = 100;
+const DISPATCH_MAX_COUNT = 200;
 
 function validateBatchAssign(body) {
   const { package_ids, courier_id } = body;
@@ -24,7 +25,29 @@ function validateBatchAssign(body) {
   return { valid: true, data: { package_ids: uniqueIds, courier_id } };
 }
 
+function validateDispatch(body) {
+  const { package_ids, operator_name } = body;
+
+  if (!Array.isArray(package_ids) || package_ids.length === 0) {
+    return { valid: false, message: '请提供包裹ID列表（非空数组）' };
+  }
+  if (package_ids.length > DISPATCH_MAX_COUNT) {
+    return { valid: false, message: `单次智能分派不超过${DISPATCH_MAX_COUNT}个包裹` };
+  }
+  const uniqueIds = [...new Set(package_ids)];
+
+  return {
+    valid: true,
+    data: {
+      package_ids: uniqueIds,
+      operator_name: operator_name || '系统运营',
+    },
+  };
+}
+
 module.exports = {
   validateBatchAssign,
+  validateDispatch,
   BATCH_ASSIGN_MAX_COUNT,
+  DISPATCH_MAX_COUNT,
 };
