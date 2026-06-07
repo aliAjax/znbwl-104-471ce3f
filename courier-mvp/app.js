@@ -41,6 +41,7 @@ app.get('/', (req, res) => {
       'POST   /api/packages/dispatch/preview': '智能分派预览 (body: {package_ids: [1,2,3], operator_name?: "运营人员"})，按站点、区域、小哥在岗状态和负载生成推荐方案，返回 plan_id 和 30 分钟有效期，不落库',
       'POST   /api/packages/dispatch/confirm': '确认智能分派 (body: {plan_id: 1, operator_name?: "运营人员"})，校验方案快照一致性后批量落库，不一致的包裹标记为 INVALID 并说明失效原因',
       'PUT    /api/packages/:id/status': '更新包裹状态 (body: {status, courier_id?})，不可直接变更为 DELIVERED',
+      'GET    /api/packages/:id/timeline': '获取包裹统一业务时间线（合并状态轨迹、预约变更、异常件、签收凭证、COD收款）',
       'POST   /api/exceptions': '登记异常件 (body: {package_id, courier_id, exception_type, description?, on_site_remark?})',
       'GET    /api/exceptions': '查询异常件列表 (?status=xxx&courier_id=xxx&package_id=xxx)',
       'GET    /api/exceptions/:id': '查看异常件详情',

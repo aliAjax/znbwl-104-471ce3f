@@ -10,6 +10,7 @@ const { validateBatchAssign, validateDispatchPreview, validateDispatchConfirm } 
 const { OPERATOR_TYPES, addPackageTrack, getPackageTracks, updatePackageStatusWithTrack } = require('../services/package_track');
 const { previewDispatch, confirmDispatch } = require('../services/dispatch');
 const { getAppointmentSummaryForPackage } = require('../services/delivery_appointment');
+const { getPackageTimeline } = require('../services/package_timeline');
 
 const router = Router();
 
@@ -399,6 +400,20 @@ router.post('/dispatch/confirm', async (req, res) => {
     if (err.message && (err.message.includes('不存在') || err.message.includes('过期') || err.message.includes('重复') || err.message.includes('异常'))) {
       return res.status(400).json(fail(err.message));
     }
+    res.status(500).json(fail('服务器内部错误'));
+  }
+});
+
+router.get('/:id/timeline', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const timeline = await getPackageTimeline(id);
+    res.json(success(timeline));
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json(fail(err.message));
+    }
+    console.error('查询包裹时间线失败:', err);
     res.status(500).json(fail('服务器内部错误'));
   }
 });
