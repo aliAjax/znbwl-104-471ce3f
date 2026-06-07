@@ -58,7 +58,11 @@ router.post('/', async (req, res) => {
     res.status(201).json(success(appointment, '预约创建成功'));
   } catch (err) {
     if (err.statusCode) {
-      return res.status(err.statusCode).json(fail(err.message));
+      const response = fail(err.message);
+      if (err.conflictingPackages) {
+        response.data = { conflicting_packages: err.conflictingPackages };
+      }
+      return res.status(err.statusCode).json(response);
     }
     console.error('创建预约失败:', err);
     res.status(500).json(fail('服务器内部错误'));
@@ -101,7 +105,11 @@ router.put('/:packageId', async (req, res) => {
     res.json(success(appointment, '预约更新成功'));
   } catch (err) {
     if (err.statusCode) {
-      return res.status(err.statusCode).json(fail(err.message));
+      const response = fail(err.message);
+      if (err.conflictingPackages) {
+        response.data = { conflicting_packages: err.conflictingPackages };
+      }
+      return res.status(err.statusCode).json(response);
     }
     console.error('更新预约失败:', err);
     res.status(500).json(fail('服务器内部错误'));

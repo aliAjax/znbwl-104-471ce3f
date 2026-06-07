@@ -56,6 +56,53 @@ async function canModifyAppointment(packageId) {
   return true;
 }
 
+async function checkAppointmentConflict(courierId, appointmentStart, appointmentEnd, excludePackageId = null) {
+  if (!courierId) {
+    return { hasConflict: false, conflictingPackages: [] };
+  }
+
+  const normalizedStart = normalizeDateTime(appointmentStart);
+  const normalizedEnd = normalizeDateTime(appointmentEnd);
+
+  let sql = `
+    SELECT p.id as package_id, p.tracking_no, da.appointment_start, da.appointment_end
+    FROM delivery_appointment da
+    LEFT JOIN package p ON da.package_id = p.id
+    WHERE p.courier_id = ?
+      AND da.status = ?
+      AND (
+        (da.appointment_start < ? AND da.appointment_end > ?)
+        OR (da.appointment_start < ? AND da.appointment_end > ?)
+        OR (da.appointment_start >= ? AND da.appointment_end <= ?)
+      )
+  `;
+  const params = [
+    courierId,
+    APPOINTMENT_STATUSES.ACTIVE,
+    normalizedEnd, normalizedStart,
+    normalizedEnd, normalizedStart,
+    normalizedStart, normalizedEnd,
+  ];
+
+  if (excludePackageId) {
+    sql += ' AND p.id != ?';
+    params.push(excludePackageId);
+  }
+
+  const conflictingAppointments = await allAsync(sql, params);
+
+  if (conflictingAppointments.length > 0) {
+    const trackingNos = conflictingAppointments.map(a => a.tracking_no);
+    return {
+      hasConflict: true,
+      conflictingPackages: conflictingAppointments,
+      message: `该快递小哥在该时间段已有预约，冲突运单号: ${trackingNos.join('、')}`,
+    };
+  }
+
+  return { hasConflict: false, conflictingPackages: [] };
+}
+
 async function createAppointment({
   packageId,
   appointmentStart,
@@ -109,6 +156,14 @@ async function createAppointment({
   if (existingAppointment) {
     const err = new Error('该包裹已有预约，请使用修改接口');
     err.statusCode = 400;
+    throw err;
+  }
+
+  const conflictCheck = await checkAppointmentConflict(pkg.courier_id, appointmentStart, appointmentEnd);
+  if (conflictCheck.hasConflict) {
+    const err = new Error(conflictCheck.message);
+    err.statusCode = 400;
+    err.conflictingPackages = conflictCheck.conflictingPackages;
     throw err;
   }
 
@@ -220,6 +275,22 @@ async function updateAppointment({
     const err = new Error('预约开始时间必须早于结束时间');
     err.statusCode = 400;
     throw err;
+  }
+
+  if (appointmentStart !== undefined || appointmentEnd !== undefined) {
+    const pkg = await getAsync('SELECT courier_id FROM package WHERE id = ?', [packageId]);
+    const conflictCheck = await checkAppointmentConflict(
+      pkg ? pkg.courier_id : null,
+      normalizedStart,
+      normalizedEnd,
+      packageId
+    );
+    if (conflictCheck.hasConflict) {
+      const err = new Error(conflictCheck.message);
+      err.statusCode = 400;
+      err.conflictingPackages = conflictCheck.conflictingPackages;
+      throw err;
+    }
   }
 
   const oldValues = JSON.stringify({
@@ -532,4 +603,5 @@ module.exports = {
   getAppointmentSummaryForPackage,
   getPackagesWithAppointmentFilter,
   canModifyAppointment,
+  checkAppointmentConflict,
 };
